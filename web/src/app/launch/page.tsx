@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
 
@@ -19,6 +19,7 @@ type FormState = {
 };
 
 const steps = ["Project", "Branding", "Socials", "Launch", "Review"];
+const storageKey = "kodiak-launch-draft-v2";
 
 const initialForm: FormState = {
   name: "",
@@ -39,12 +40,14 @@ function Field({
   placeholder,
   onChange,
   maxLength,
+  hint,
 }: {
   label: string;
   value: string;
   placeholder: string;
   onChange: (value: string) => void;
   maxLength?: number;
+  hint?: string;
 }) {
   return (
     <label className="block">
@@ -56,8 +59,20 @@ function Field({
         placeholder={placeholder}
         className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4 text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/40 focus:bg-white/[0.06]"
       />
+      {hint && <span className="mt-2 block text-xs text-zinc-600">{hint}</span>}
     </label>
   );
+}
+
+function validUrl(value: string) {
+  if (!value) return false;
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 export default function LaunchPage() {
@@ -66,6 +81,42 @@ export default function LaunchPage() {
   const [form, setForm] = useState<FormState>(initialForm);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [bannerPreview, setBannerPreview] = useState<string | null>(null);
+  const [draftLoaded, setDraftLoaded] = useState(false);
+
+  useEffect(() => {
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const saved = window.localStorage.getItem(storageKey);
+
+        if (saved) {
+          const parsed = JSON.parse(saved) as {
+            form?: Partial<FormState>;
+            logoPreview?: string | null;
+            bannerPreview?: string | null;
+          };
+
+          setForm((current) => ({ ...current, ...parsed.form }));
+          setLogoPreview(parsed.logoPreview ?? null);
+          setBannerPreview(parsed.bannerPreview ?? null);
+        }
+      } catch (error) {
+        console.error("Unable to restore Kodiak draft:", error);
+      } finally {
+        setDraftLoaded(true);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(restoreTimer);
+  }, []);
+
+  useEffect(() => {
+    if (!draftLoaded) return;
+
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({ form, logoPreview, bannerPreview }),
+    );
+  }, [bannerPreview, draftLoaded, form, logoPreview]);
 
   const projectValid =
     form.name.trim().length >= 2 &&
@@ -86,7 +137,38 @@ export default function LaunchPage() {
     ? `$${form.symbol.replace("$", "").toUpperCase()}`
     : "$TOKEN";
 
-  const estimatedCost = useMemo(() => "≈ 0.02 SOL + network fees", []);
+  const launchScore = useMemo(() => {
+    let score = 0;
+
+    if (form.name.trim().length >= 2) score += 10;
+    if (form.symbol.trim().length >= 2) score += 10;
+    if (form.description.trim().length >= 80) score += 15;
+    else if (form.description.trim().length >= 10) score += 8;
+    if (logoPreview) score += 15;
+    if (bannerPreview) score += 8;
+    if (validUrl(form.website)) score += 12;
+    if (validUrl(form.x)) score += 10;
+    if (validUrl(form.telegram)) score += 10;
+    if (validUrl(form.discord)) score += 5;
+    if (Number(form.supply) > 0) score += 5;
+
+    return Math.min(score, 100);
+  }, [bannerPreview, form, logoPreview]);
+
+  const readiness = useMemo(
+    () => [
+      { label: "Token name and symbol", complete: form.name.length >= 2 && form.symbol.length >= 2 },
+      { label: "Detailed description", complete: form.description.length >= 80 },
+      { label: "Logo uploaded", complete: Boolean(logoPreview) },
+      { label: "Banner uploaded", complete: Boolean(bannerPreview) },
+      { label: "Website added", complete: validUrl(form.website) },
+      { label: "X profile added", complete: validUrl(form.x) },
+      { label: "Telegram added", complete: validUrl(form.telegram) },
+    ],
+    [bannerPreview, form, logoPreview],
+  );
+
+  const estimatedCost = "≈ 0.02 SOL + network fees";
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -98,9 +180,7 @@ export default function LaunchPage() {
   ) => {
     const file = event.target.files?.[0];
 
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
+    if (!file || !file.type.startsWith("image/")) {
       event.target.value = "";
       return;
     }
@@ -110,31 +190,45 @@ export default function LaunchPage() {
     reader.readAsDataURL(file);
   };
 
-  const next = () => {
-    if (stepValid) setStep((current) => Math.min(current + 1, 4));
+  const clearDraft = () => {
+    window.localStorage.removeItem(storageKey);
+    setForm(initialForm);
+    setLogoPreview(null);
+    setBannerPreview(null);
+    setStep(0);
   };
 
   return (
-    <main className="min-h-screen bg-[#070707] px-5 py-8 text-zinc-100 sm:px-8">
-      <div className="mx-auto max-w-6xl">
-        <div className="flex items-center justify-between gap-4">
+    <main className="min-h-screen bg-[#070707] px-4 py-6 text-zinc-100 sm:px-8 lg:py-10">
+      <div className="mx-auto max-w-7xl">
+        <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-start">
           <div>
             <p className="text-sm font-black uppercase tracking-[0.24em] text-emerald-300">
               Creator Studio
             </p>
-            <h1 className="mt-3 text-4xl font-black tracking-tight sm:text-5xl">
+            <h1 className="mt-3 text-4xl font-black tracking-tight sm:text-5xl lg:text-6xl">
               Launch your token
             </h1>
-            <p className="mt-3 text-zinc-400">
-              Build, preview, and review your Kodiak launch.
+            <p className="mt-3 max-w-2xl text-zinc-400">
+              Build, score, preview, and review your Kodiak launch before signing.
             </p>
           </div>
-          <Link
-            href="/"
-            className="rounded-xl border border-white/10 px-4 py-2 text-sm font-bold text-zinc-300"
-          >
-            Exit
-          </Link>
+
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={clearDraft}
+              className="rounded-xl border border-white/10 px-4 py-2 text-sm font-bold text-zinc-400"
+            >
+              Clear draft
+            </button>
+            <Link
+              href="/"
+              className="rounded-xl border border-white/10 px-4 py-2 text-sm font-bold text-zinc-300"
+            >
+              Exit
+            </Link>
+          </div>
         </div>
 
         <div className="mt-8 h-2 overflow-hidden rounded-full bg-zinc-900">
@@ -152,7 +246,7 @@ export default function LaunchPage() {
               onClick={() => {
                 if (index <= step) setStep(index);
               }}
-              className={`rounded-xl px-2 py-3 text-xs font-black transition sm:text-sm ${
+              className={`rounded-xl px-1 py-3 text-[11px] font-black transition sm:px-3 sm:text-sm ${
                 index === step
                   ? "bg-emerald-400 text-black"
                   : index < step
@@ -165,8 +259,8 @@ export default function LaunchPage() {
           ))}
         </div>
 
-        <div className="mt-8 grid gap-7 lg:grid-cols-[1.15fr_.85fr]">
-          <section className="rounded-[2rem] border border-white/10 bg-white/[0.025] p-6 sm:p-8">
+        <div className="mt-8 grid gap-7 xl:grid-cols-[1.1fr_.9fr]">
+          <section className="rounded-[2rem] border border-white/10 bg-white/[0.025] p-5 sm:p-8">
             {step === 0 && (
               <div className="space-y-5">
                 <div>
@@ -190,6 +284,7 @@ export default function LaunchPage() {
                     update("symbol", value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase())
                   }
                   maxLength={10}
+                  hint="Letters and numbers only."
                 />
 
                 <label className="block">
@@ -201,11 +296,14 @@ export default function LaunchPage() {
                     onChange={(event) => update("description", event.target.value)}
                     placeholder="Tell the community what your project is about."
                     maxLength={500}
-                    className="min-h-36 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4 text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/40"
+                    className="min-h-44 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4 text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/40"
                   />
-                  <p className="mt-2 text-right text-xs text-zinc-600">
-                    {form.description.length}/500
-                  </p>
+                  <div className="mt-2 flex justify-between text-xs">
+                    <span className={form.description.length >= 80 ? "text-emerald-300" : "text-zinc-600"}>
+                      80+ characters recommended
+                    </span>
+                    <span className="text-zinc-600">{form.description.length}/500</span>
+                  </div>
                 </label>
               </div>
             )}
@@ -233,7 +331,7 @@ export default function LaunchPage() {
                 <label className="block rounded-3xl border border-dashed border-white/15 bg-black/20 p-6 text-center">
                   <span className="text-lg font-black">Upload banner</span>
                   <span className="mt-2 block text-sm text-zinc-500">
-                    Optional, wide image recommended
+                    Optional, but improves your Launch Score
                   </span>
                   <input
                     type="file"
@@ -353,15 +451,11 @@ export default function LaunchPage() {
                     Prepare Launch Transaction
                   </button>
                 )}
-
-                <p className="text-center text-xs leading-5 text-zinc-600">
-                  This version validates and previews your launch. The on-chain Raydium transaction is the next integration.
-                </p>
               </div>
             )}
           </section>
 
-          <aside className="lg:sticky lg:top-6 lg:self-start">
+          <aside className="space-y-5 xl:sticky xl:top-6 xl:self-start">
             <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-zinc-950">
               <div className="relative h-36 bg-gradient-to-br from-amber-300/20 via-zinc-900 to-emerald-400/10">
                 {bannerPreview && (
@@ -388,19 +482,44 @@ export default function LaunchPage() {
                 <p className="mt-4 min-h-20 leading-7 text-zinc-400">
                   {form.description || "Your project description will appear here as you type."}
                 </p>
+              </div>
+            </div>
 
-                <div className="mt-6 grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl bg-white/[0.04] p-4">
-                    <p className="text-xs text-zinc-500">Supply</p>
-                    <p className="mt-1 font-black">
-                      {Number(form.supply || 0).toLocaleString()}
-                    </p>
-                  </div>
-                  <div className="rounded-2xl bg-white/[0.04] p-4">
-                    <p className="text-xs text-zinc-500">Launch status</p>
-                    <p className="mt-1 font-black text-emerald-300">Draft</p>
-                  </div>
+            <div className="rounded-[2rem] border border-white/10 bg-white/[0.025] p-6">
+              <div className="flex items-end justify-between">
+                <div>
+                  <p className="text-sm font-bold uppercase tracking-[0.18em] text-zinc-500">
+                    Kodiak Launch Score
+                  </p>
+                  <p className="mt-2 text-5xl font-black">{launchScore}</p>
                 </div>
+                <p className="pb-1 text-xl font-black text-zinc-600">/100</p>
+              </div>
+
+              <div className="mt-5 h-3 overflow-hidden rounded-full bg-zinc-900">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-amber-300 transition-all duration-300"
+                  style={{ width: `${launchScore}%` }}
+                />
+              </div>
+
+              <div className="mt-6 space-y-3">
+                {readiness.map((item) => (
+                  <div key={item.label} className="flex items-center gap-3 text-sm">
+                    <span
+                      className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-black ${
+                        item.complete
+                          ? "bg-emerald-400/15 text-emerald-300"
+                          : "bg-white/[0.05] text-zinc-600"
+                      }`}
+                    >
+                      {item.complete ? "✓" : "·"}
+                    </span>
+                    <span className={item.complete ? "text-zinc-300" : "text-zinc-600"}>
+                      {item.label}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           </aside>
@@ -420,7 +539,9 @@ export default function LaunchPage() {
             <button
               type="button"
               disabled={!stepValid}
-              onClick={next}
+              onClick={() => {
+                if (stepValid) setStep((current) => Math.min(current + 1, 4));
+              }}
               className="rounded-2xl bg-emerald-400 px-7 py-4 font-black text-black transition disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
             >
               Continue

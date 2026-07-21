@@ -75,12 +75,21 @@ export default function PlatformSetupPage() {
     };
   }, []);
 
+  let cpConfigIsValid = false;
+
+  try {
+    cpConfigIsValid =
+      new PublicKey(cpConfigId).toBase58() === cpConfigId;
+  } catch {
+    cpConfigIsValid = false;
+  }
+
   const canCreate =
     connected &&
     Boolean(publicKey) &&
     Boolean(signAllTransactions) &&
     confirmed &&
-    Boolean(cpConfigId) &&
+    cpConfigIsValid &&
     status.kind !== "working";
 
   async function createPlatform() {
@@ -92,6 +101,16 @@ export default function PlatformSetupPage() {
     });
 
     try {
+      let cpConfig: PublicKey;
+
+      try {
+        cpConfig = new PublicKey(cpConfigId);
+      } catch {
+        throw new Error(
+          "The selected CPMM configuration is not a valid Solana public key.",
+        );
+      }
+
       const raydium = await loadDevnetRaydium({
         connection,
         owner: publicKey,
@@ -105,7 +124,7 @@ export default function PlatformSetupPage() {
           platformClaimFeeWallet: publicKey,
           platformLockNftWallet: publicKey,
           platformVestingWallet: PublicKey.default,
-          cpConfigId: new PublicKey(cpConfigId),
+          cpConfigId: cpConfig,
           transferFeeExtensionAuth: publicKey,
           creatorFeeRate: new BN(CREATOR_FEE_RATE),
           migrateCpLockNftScale: {
@@ -219,6 +238,12 @@ export default function PlatformSetupPage() {
                     placeholder="Paste a Devnet CPMM config ID"
                     className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-4 text-sm"
                   />
+                )}
+
+                {cpConfigId && !cpConfigIsValid && (
+                  <p className="mt-2 text-sm font-bold text-red-300">
+                    This is not a valid Solana CPMM configuration address.
+                  </p>
                 )}
               </label>
 

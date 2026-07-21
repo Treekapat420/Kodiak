@@ -32,3 +32,28 @@ button {
 ::selection {
   background: rgba(251, 191, 36, 0.3);
 }
+
+/* Kodiak Solana wallet controls */
+.kodiak-wallet-button.wallet-adapter-button {
+  height: 42px;
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  border-radius: 12px;
+  background: rgba(52, 211, 153, 0.1);
+  padding: 0 16px;
+  color: rgb(110 231 183);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.kodiak-wallet-button.wallet-adapter-button:not([disabled]):hover {
+  background: rgba(52, 211, 153, 0.16);
+}
+
+.wallet-adapter-modal-wrapper {
+  background: #101010;
+}
+
+.wallet-adapter-modal-title {
+  color: #fafafa;
+}

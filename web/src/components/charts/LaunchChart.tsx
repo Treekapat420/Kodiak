@@ -9,6 +9,7 @@ import {
 } from "lightweight-charts";
 
 type Interval = "1s" | "1m" | "5m" | "15m" | "1h";
+type ChartMode = "candles" | "line";
 
 type Candle = {
   time: number;
@@ -49,6 +50,7 @@ export function LaunchChart({ mint }: { mint: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [interval, setInterval] = useState<Interval>("1m");
+  const [chartMode, setChartMode] = useState<ChartMode>("candles");
   const [candles, setCandles] = useState<Candle[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [message, setMessage] = useState("Loading Kodiak market data…");
@@ -138,7 +140,7 @@ export function LaunchChart({ mint }: { mint: string }) {
       time: candle.time as UTCTimestamp,
     }));
 
-    if (candles.length > 0 && candles.length < 4) {
+    if (chartMode === "line") {
       const line = chart.addLineSeries({
         color: "#6ee7b7",
         lineWidth: 3,
@@ -212,6 +214,27 @@ export function LaunchChart({ mint }: { mint: string }) {
             ) : null}
           </div>
           <p className="mt-1 text-xs text-zinc-500">Kodiak Devnet market data · real trades only</p>
+        </div>
+
+        <div className="flex rounded-xl border border-white/10 p-1">
+          <button
+            type="button"
+            onClick={() => setChartMode("candles")}
+            className={`rounded-lg px-3 py-2 text-xs font-black ${
+              chartMode === "candles" ? "bg-white text-black" : "text-zinc-400"
+            }`}
+          >
+            Candles
+          </button>
+          <button
+            type="button"
+            onClick={() => setChartMode("line")}
+            className={`rounded-lg px-3 py-2 text-xs font-black ${
+              chartMode === "line" ? "bg-white text-black" : "text-zinc-400"
+            }`}
+          >
+            Line
+          </button>
         </div>
 
         <div className="flex max-w-full gap-2 overflow-x-auto pb-1">

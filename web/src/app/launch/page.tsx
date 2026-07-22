@@ -418,7 +418,50 @@ export default function LaunchPage() {
 
       collectSignatures(sent);
       const mint = mintKeypair.publicKey.toBase58();
-      const uniqueSignatures = Array.from(new Set(signatures));
+
+      const looksLikeSolanaSignature = (value: string) =>
+        /^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(value);
+
+      let uniqueSignatures = Array.from(new Set(signatures)).filter(
+        looksLikeSolanaSignature,
+      );
+
+      if (uniqueSignatures.length === 0) {
+        setLaunchStatus({
+          kind: "working",
+          message: "Locating the confirmed launch transaction on Devnet…",
+        });
+
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const onChainSignatures =
+            await connection.getSignaturesForAddress(
+              mintKeypair.publicKey,
+              { limit: 10 },
+              "confirmed",
+            );
+
+          uniqueSignatures = onChainSignatures
+            .filter((entry) => entry.err === null)
+            .map((entry) => entry.signature)
+            .filter(looksLikeSolanaSignature);
+
+          if (uniqueSignatures.length > 0) break;
+
+          await new Promise((resolve) =>
+            window.setTimeout(resolve, 1200),
+          );
+        }
+      }
+
+      const launchSignature = uniqueSignatures[0];
+
+      if (!launchSignature) {
+        throw new Error(
+          "The token was created, but Kodiak could not locate its confirmed launch transaction. Do not launch again; check the mint on Solana Explorer.",
+        );
+      }
+
+      const createdAt = new Date().toISOString();
 
       window.localStorage.setItem(
         "kodiak-last-devnet-launch",
@@ -427,17 +470,10 @@ export default function LaunchPage() {
           signatures: uniqueSignatures,
           name: form.name,
           symbol: form.symbol,
-          createdAt: new Date().toISOString(),
+          creator: publicKey.toBase58(),
+          createdAt,
         }),
       );
-
-      const launchSignature = uniqueSignatures[0];
-
-      if (!launchSignature) {
-        throw new Error(
-          "The token was created, but Kodiak could not capture the launch transaction signature. Check Solana Explorer before retrying.",
-        );
-      }
 
       setLaunchStatus({
         kind: "working",
@@ -457,7 +493,7 @@ export default function LaunchPage() {
             name: form.name,
             symbol: form.symbol,
             signature: launchSignature,
-            createdAt: new Date().toISOString(),
+            createdAt,
           }),
         },
       );

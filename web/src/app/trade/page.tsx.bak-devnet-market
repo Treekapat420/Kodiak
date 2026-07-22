@@ -336,43 +336,9 @@ export default function TradePage() {
       const result = await execute({ sendAndConfirm: true });
       const signature = collectSignature(result);
 
-      if (!signature) {
-        throw new Error("The purchase succeeded but no transaction signature was returned.");
-      }
-
-      setStatus({
-        kind: "working",
-        message: "Purchase confirmed. Updating the token chart...",
-      });
-
-      let recorded = false;
-      for (let attempt = 0; attempt < 5 && !recorded; attempt += 1) {
-        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 2500));
-        const response = await fetch(`/api/token/${mintA}/trades`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            wallet: publicKey.toBase58(),
-            signature,
-            side: "buy",
-            solAmount: Number(buySol),
-          }),
-        });
-        if (response.ok) {
-          recorded = true;
-          break;
-        }
-        if (response.status !== 409) {
-          const payload = await response.json().catch(() => null);
-          throw new Error(payload?.error || "The purchase succeeded, but chart recording failed.");
-        }
-      }
-
       setStatus({
         kind: "success",
-        message: recorded
-          ? `${buySol} Devnet SOL purchase confirmed and added to the chart.`
-          : `${buySol} Devnet SOL purchase confirmed. Chart indexing is still pending.`,
+        message: `${buySol} Devnet SOL purchase confirmed on-chain.`,
         signature,
       });
     } catch (error) {

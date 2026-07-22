@@ -431,9 +431,54 @@ export default function LaunchPage() {
         }),
       );
 
+      const launchSignature = uniqueSignatures[0];
+
+      if (!launchSignature) {
+        throw new Error(
+          "The token was created, but Kodiak could not capture the launch transaction signature. Check Solana Explorer before retrying.",
+        );
+      }
+
+      setLaunchStatus({
+        kind: "working",
+        message: "Registering the verified launch in the Creator Dashboard…",
+      });
+
+      const registrationResponse = await fetch(
+        "/api/creator/launches",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            mint,
+            creator: publicKey.toBase58(),
+            name: form.name,
+            symbol: form.symbol,
+            signature: launchSignature,
+            createdAt: new Date().toISOString(),
+          }),
+        },
+      );
+
+      const registrationPayload =
+        (await registrationResponse.json()) as {
+          launch?: { mint: string };
+          error?: string;
+        };
+
+      if (!registrationResponse.ok || !registrationPayload.launch) {
+        throw new Error(
+          registrationPayload.error ||
+            "The token launched, but Creator Dashboard registration failed.",
+        );
+      }
+
       setLaunchStatus({
         kind: "success",
-        message: "Token created through Kodiak on Solana Devnet.",
+        message:
+          "Token created and automatically added to the Creator Dashboard.",
         mint,
         signatures: uniqueSignatures,
       });

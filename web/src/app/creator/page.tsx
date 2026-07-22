@@ -275,13 +275,16 @@ export default function CreatorPage() {
                     </div>
 
                     <div className="mt-5 flex flex-wrap gap-3">
-                      <a href={`https://explorer.solana.com/address/${launch.mint}?cluster=devnet`} target="_blank" rel="noreferrer" className="rounded-xl border border-white/10 px-4 py-3 text-sm font-bold text-amber-300">
-                        View token
+                      <a
+                        href={`/token/${launch.mint}`}
+                        className="rounded-xl border border-white/10 px-4 py-3 text-sm font-bold text-amber-300"
+                      >
+                        View token + chart
                       </a>
                       <a href={`https://explorer.solana.com/tx/${launch.signature}?cluster=devnet`} target="_blank" rel="noreferrer" className="rounded-xl border border-white/10 px-4 py-3 text-sm font-bold text-zinc-300">
                         Launch transaction
                       </a>
-                      <a href="/trade" className="rounded-xl border border-white/10 px-4 py-3 text-sm font-bold text-emerald-300">
+                      <a href={`/trade?mint=${encodeURIComponent(launch.mint)}`} className="rounded-xl border border-white/10 px-4 py-3 text-sm font-bold text-emerald-300">
                         Trade on Devnet
                       </a>
                     </div>

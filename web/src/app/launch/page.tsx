@@ -846,15 +846,15 @@ export default function LaunchPage() {
 
           <aside className="space-y-5 xl:sticky xl:top-6 xl:self-start">
             <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-zinc-950">
-              <div className="relative h-36 bg-gradient-to-br from-amber-300/20 via-zinc-900 to-emerald-400/10">
+              <div className="relative h-20 sm:h-36 bg-gradient-to-br from-amber-300/10 via-zinc-950 to-emerald-400/5">
                 {bannerPreview && (
                   <img src={bannerPreview} alt="Token banner preview" className="h-full w-full object-cover" />
                 )}
               </div>
 
-              <div className="p-6">
-                <div className="-mt-14 flex items-end justify-between">
-                  <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-3xl border-4 border-zinc-950 bg-gradient-to-br from-amber-300 to-orange-500 text-2xl font-black text-black">
+              <div className="p-4 sm:p-6">
+                <div className="-mt-10 flex items-end justify-between sm:-mt-14">
+                  <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-3xl sm:h-24 sm:w-24 border-4 border-zinc-950 bg-gradient-to-br from-amber-300 to-orange-500 text-2xl font-black text-black">
                     {logoPreview ? (
                       <img src={logoPreview} alt="Token logo preview" className="h-full w-full object-cover" />
                     ) : (

@@ -5,6 +5,7 @@ import { LaunchGrid } from "@/components/LaunchGrid";
 import { Navbar } from "@/components/Navbar";
 import { Stats } from "@/components/Stats";
 import { WhyKodiak } from "@/components/WhyKodiak";
+import { LiveActivity } from "@/components/LiveActivity";
 
 export default function Home() {
   return (
@@ -17,6 +18,7 @@ export default function Home() {
       <Navbar />
       <Hero />
       <Stats />
+      <LiveActivity />
       <LaunchGrid />
       <WhyKodiak />
       <FeeSection />

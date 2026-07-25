@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTrades, inferTokenAmount, saveTrade, type StoredTrade } from "@/lib/devnet-market";
+import { recordCreatorReward } from "@/lib/creator-rewards";
 
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ mint: string }> };
@@ -36,6 +37,12 @@ export async function POST(request: NextRequest, context: Context) {
       timestamp: inferred.timestamp,
     };
     await saveTrade(trade);
+
+    try {
+      await recordCreatorReward(trade);
+    } catch (rewardError) {
+      console.error("Creator reward ledger write failed:", rewardError);
+    }
     return NextResponse.json({ ok: true, trade });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to record trade." }, { status: 500 });

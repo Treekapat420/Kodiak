@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useEffect, useState } from "react";
+import { ClaimCreatorRewards } from "@/components/creator/ClaimCreatorRewards";
 
 type Launch = {
   mint: string;
@@ -136,19 +137,21 @@ export default function DashboardPage() {
           <Metric label="Launches" value={String(totals.launchCount)} />
           <Metric label="Recorded trades" value={String(totals.tradeCount)} />
           <Metric label="Tracked volume" value={`${fmt(totals.trackedVolumeSol)} SOL`} />
-          <Metric label="Creator accrued" value={`${fmt(totals.creatorRewardsSol, 8)} SOL`} accent />
+          <Metric label="Creator tracked" value={`${fmt(totals.creatorRewardsSol, 8)} SOL`} accent />
         </section>
+
+                <ClaimCreatorRewards />
 
         <section className="mt-6 grid gap-6 lg:grid-cols-2">
           <Card title="Fee ledger totals" eyebrow="Revenue accounting">
             <div className="grid gap-3 sm:grid-cols-2">
-              <Box label="Creator accrued" value={`${fmt(totals.creatorRewardsSol, 8)} SOL`} note="0.45% of tracked trades" />
+              <Box label="Creator tracked" value={`${fmt(totals.creatorRewardsSol, 8)} SOL`} note="0.45% of tracked trades" />
               <Box label="Kodiak accrued" value={`${fmt(totals.kodiakFeesSol, 8)} SOL`} note="0.50% platform accounting" />
               <Box label="Infrastructure" value={`${fmt(totals.infraFeesSol, 8)} SOL`} note="0.25% accounting" />
               <Box label="Success Fund" value={`${fmt(totals.successFundSol, 8)} SOL`} note="5% of Kodiak revenue" />
             </div>
             <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/[0.05] p-4">
-              <p className="font-black text-amber-200">Accrued accounting — not claimable SOL yet.</p>
+              <p className="font-black text-amber-200">Kodiak audit ledger — separate from Raydium&apos;s on-chain vault.</p>
               <p className="mt-2 text-xs leading-6 text-zinc-500">
                 The ledger records what would accrue under Kodiak&apos;s current Devnet fee model.
                 On-chain fee transfer, escrow, and claims still need to be implemented before mainnet.

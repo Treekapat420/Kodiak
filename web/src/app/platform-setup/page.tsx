@@ -22,7 +22,7 @@ type SetupStatus =
   | { kind: "success"; message: string; platformId: string; signature?: string }
   | { kind: "error"; message: string; logs?: string[] };
 
-const PLATFORM_FEE_RATE = 6_000;
+const PLATFORM_FEE_RATE = 5_000;
 const CREATOR_FEE_RATE = 4_500;
 const PLATFORM_LP_SCALE = 0;
 const CREATOR_LP_SCALE = 100_000;

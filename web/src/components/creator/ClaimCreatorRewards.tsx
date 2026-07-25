@@ -166,11 +166,11 @@ export function ClaimCreatorRewards() {
               Raydium claimable now
             </p>
             </div>
-            
+
             <p className="mt-2 text-2x1 font-black text-emerald-300">
               {claimableSol === null
                 ? "Loading..."
-                : '${claimableSol.toFixed(9)} SOL'}
+                : `${claimableSol.toFixed(9)} SOL`}
             </p>
             
             <p className="mt-1 text-xs leading-5 text-zinc-600">

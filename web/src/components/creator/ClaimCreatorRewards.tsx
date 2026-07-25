@@ -2,8 +2,8 @@
 
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { NATIVE_MINT, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { TxVersion } from "@raydium-io/raydium-sdk-v2";
-import { useState } from "react";
+import { TxVersion, getPdaCreatorVault, } from "@raydium-io/raydium-sdk-v2";
+import { useEffect, useState } from "react";
 import {
   DEVNET_LAUNCHPAD_PROGRAM_ID,
   loadDevnetRaydium,
@@ -39,12 +39,55 @@ function signatureFrom(value: unknown): string | undefined {
 export function ClaimCreatorRewards() {
   const { connection } = useConnection();
   const { connected, publicKey, signAllTransactions } = useWallet();
+  const [claimableSol, setClaimableSol] = useState<number | null>(null);
 
   const [status, setStatus] = useState<Status>({
     kind: "idle",
     message:
       "Claims use Raydium LaunchLab's real creator-fee vault on Solana Devnet.",
   });
+
+  async function refreshClaimableBalance() {
+    if (!publicKey) {
+      setClaimableSol(null);
+      return;
+    }
+
+    try {
+      const creatorVault = getPdaCreatorVault(
+        DEVNET_LAUNCHPAD_PROGRAM_ID,
+        publicKey,
+        NATIVE_MINT
+      ).publicKey;
+
+      const accountInfo = await connection.getAccountInfo(
+        creatorVault,
+        "confirmed"
+      );
+
+      if (!accountInfo) {
+        setClaimableSol(0);
+        return;
+      }
+
+      const balance = await connection.getTokenAccountBalance(
+        creatorVault,
+        "confirmed"
+      );
+
+      setClaimableSol(Number(balance.value.uiAmountString ?? "0"));
+    } catch (error) {
+      console.error("Unable to read creator vault balance:", error);
+      setClaimableSol(null);
+    }
+  }
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void refreshClaimableBalance();
+    }, 0);
+    
+    return () => clearTimeout(timer);
+  }, [publicKey, connection]);
 
   async function claim() {
     if (!connected || !publicKey || !signAllTransactions) {
@@ -83,6 +126,8 @@ export function ClaimCreatorRewards() {
       const result = await execute({ sendAndConfirm: true });
       const signature = signatureFrom(result);
 
+      await refreshClaimableBalance();
+
       setStatus({
         kind: "success",
         message:
@@ -115,8 +160,24 @@ export function ClaimCreatorRewards() {
             connected creator wallet. The Redis ledger below remains an
             analytics and audit record only.
           </p>
-        </div>
 
+          <div className="rounded-2x1 border border-emerald-400/20 bg-black/20 p-4">
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-500">
+              Raydium claimable now
+            </p>
+            </div>
+            
+            <p className="mt-2 text-2x1 font-black text-emerald-300">
+              {claimableSol === null
+                ? "Loading..."
+                : '${claimableSol.toFixed(9)} SOL'}
+            </p>
+            
+            <p className="mt-1 text-xs leading-5 text-zinc-600">
+              Live balance from Raydium&apos;s on-chain creator-fee vault.
+            </p>
+          </div>
+        
         <button
           type="button"
           disabled={!connected || busy}

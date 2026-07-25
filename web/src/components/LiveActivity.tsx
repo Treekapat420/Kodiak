@@ -35,6 +35,7 @@ type Trending = {
   name: string;
   symbol: string;
   creator: string;
+  createdAt?: string;
   tradeCount: number;
   volumeSol: number;
   buys: number;
@@ -93,11 +94,15 @@ export function LiveActivity() {
 
         if (!cancelled) {
           setPayload(next);
-          setStatus("Live • refreshes automatically");
+          setStatus("Live Devnet data • refreshes every 8 seconds");
         }
       } catch (error) {
         if (!cancelled) {
-          setStatus(error instanceof Error ? error.message : "Unable to load live activity.");
+          setStatus(
+            error instanceof Error
+              ? error.message
+              : "Unable to load live activity.",
+          );
         }
       }
     };
@@ -127,12 +132,12 @@ export function LiveActivity() {
   }, [stats.buys, stats.sells]);
 
   return (
-    <section className="relative z-10 px-4 py-8 sm:px-6 sm:py-12">
+    <section className="relative z-10 px-4 py-10 sm:px-6 sm:py-14">
       <div className="mx-auto max-w-7xl">
-        <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.26em] text-emerald-300">
-              Kodiak market
+              Live market
             </p>
             <h2 className="mt-2 text-3xl font-black sm:text-4xl">
               Live on the mountain
@@ -149,19 +154,35 @@ export function LiveActivity() {
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat label="Launches" value={String(stats.launches)} />
-          <Stat label="Recorded trades" value={String(stats.trades)} />
-          <Stat label="Devnet volume" value={`${formatSol(stats.volumeSol)} SOL`} />
-          <Stat label="Buy pressure" value={stats.trades ? `${buyRatio}% buys` : "Waiting"} />
+          <Stat
+            label="Live launches"
+            value={String(stats.launches)}
+            hint="Registered on Kodiak"
+          />
+          <Stat
+            label="Recorded trades"
+            value={String(stats.trades)}
+            hint="Devnet buys + sells"
+          />
+          <Stat
+            label="Devnet volume"
+            value={`${formatSol(stats.volumeSol)} SOL`}
+            hint="Recorded trade volume"
+          />
+          <Stat
+            label="Buy pressure"
+            value={stats.trades ? `${buyRatio}% buys` : "Waiting"}
+            hint={stats.trades ? `${stats.buys} buys • ${stats.sells} sells` : "No trades yet"}
+          />
         </div>
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-[1.15fr_.85fr]">
+        <div className="mt-6 grid gap-6 lg:grid-cols-[1.12fr_.88fr]">
           <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.025]">
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <div>
                 <h3 className="font-black">Live activity</h3>
                 <p className="mt-1 text-xs text-zinc-600">
-                  Buys, sells, and launches across Kodiak
+                  Real recorded launches, buys, and sells
                 </p>
               </div>
               <span className="flex items-center gap-2 text-xs font-black text-emerald-300">
@@ -172,14 +193,14 @@ export function LiveActivity() {
 
             <div className="max-h-[520px] overflow-y-auto">
               {activity.length ? (
-                activity.map((item) => <ActivityRow key={item.id} item={item} />)
+                activity.map((item) => (
+                  <ActivityRow key={item.id} item={item} />
+                ))
               ) : (
-                <div className="px-6 py-14 text-center">
-                  <p className="font-black text-zinc-300">Waiting for Kodiak activity</p>
-                  <p className="mt-2 text-sm text-zinc-600">
-                    New launches and recorded trades will appear here.
-                  </p>
-                </div>
+                <EmptyState
+                  title="The mountain is quiet"
+                  body="The first real Kodiak launch or recorded trade will appear here automatically."
+                />
               )}
             </div>
           </div>
@@ -191,45 +212,96 @@ export function LiveActivity() {
                   Bear tracks
                 </p>
                 <h3 className="mt-2 text-xl font-black">Trending now</h3>
+                <p className="mt-1 text-xs text-zinc-600">
+                  Ranked from actual Kodiak trade activity
+                </p>
               </div>
               <span className="text-2xl">🐻</span>
             </div>
 
             <div className="mt-5 space-y-3">
               {trending.length ? (
-                trending.map((token, index) => (
-                  <Link
-                    key={token.mint}
-                    href={`/token/${token.mint}`}
-                    className="block rounded-2xl border border-white/10 bg-black/25 p-4 transition hover:border-amber-300/30"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-300 font-black text-black">
-                          {index + 1}
+                trending.map((token, index) => {
+                  const totalSides = token.buys + token.sells;
+                  const tokenBuyRatio = totalSides
+                    ? Math.round((token.buys / totalSides) * 100)
+                    : 0;
+
+                  return (
+                    <Link
+                      key={token.mint}
+                      href={`/token/${token.mint}`}
+                      className="block rounded-2xl border border-white/10 bg-black/25 p-4 transition hover:border-amber-300/30"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-300 font-black text-black">
+                            {index + 1}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate font-black">{token.name}</p>
+                            <p className="mt-1 text-xs font-black text-amber-300">
+                              ${token.symbol}
+                            </p>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <p className="truncate font-black">{token.name}</p>
-                          <p className="mt-1 text-xs font-black text-amber-300">
-                            ${token.symbol}
+
+                        <div className="text-right">
+                          <p className="font-black">
+                            {formatSol(token.volumeSol)} SOL
+                          </p>
+                          <p className="mt-1 text-xs text-zinc-600">
+                            {token.tradeCount} trades
                           </p>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p className="font-black">{formatSol(token.volumeSol)} SOL</p>
-                        <p className="mt-1 text-xs text-zinc-600">
-                          {token.tradeCount} trades
-                        </p>
+
+                      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                        <MiniStat label="Buys" value={String(token.buys)} />
+                        <MiniStat label="Sells" value={String(token.sells)} />
+                        <MiniStat
+                          label="Buy %"
+                          value={totalSides ? `${tokenBuyRatio}%` : "—"}
+                        />
                       </div>
-                    </div>
-                  </Link>
-                ))
+                    </Link>
+                  );
+                })
               ) : (
-                <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center text-sm text-zinc-600">
-                  Trending tokens will appear as trading activity builds.
+                <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center">
+                  <p className="font-black text-zinc-300">
+                    No trending tokens yet
+                  </p>
+                  <p className="mt-2 text-sm text-zinc-600">
+                    This list will populate from real trading activity.
+                  </p>
                 </div>
               )}
             </div>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-[2rem] border border-white/10 bg-white/[0.02] p-5 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-emerald-300">
+                No demo numbers
+              </p>
+              <h3 className="mt-2 text-xl font-black">
+                Every market number above comes from Kodiak&apos;s stored activity.
+              </h3>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-500">
+                As more tokens launch and trade, the homepage fills itself in.
+                Empty states stay honest instead of displaying made-up platform statistics.
+              </p>
+            </div>
+
+            <Link
+              href="/launch"
+              className="shrink-0 rounded-xl bg-emerald-400 px-5 py-3 text-center text-sm font-black text-black"
+            >
+              Launch a token
+            </Link>
           </div>
         </div>
       </div>
@@ -248,7 +320,9 @@ function ActivityRow({ item }: { item: Activity }) {
           🚀
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-black">${item.symbol} launched</p>
+          <p className="truncate text-sm font-black">
+            ${item.symbol} launched
+          </p>
           <p className="mt-1 truncate text-xs text-zinc-600">
             by {shortAddress(item.creator)} • {item.name}
           </p>
@@ -296,13 +370,44 @@ function ActivityRow({ item }: { item: Activity }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+}) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
       <p className="text-[11px] font-black uppercase tracking-[0.16em] text-zinc-600">
         {label}
       </p>
       <p className="mt-2 text-2xl font-black text-zinc-100">{value}</p>
+      <p className="mt-1 text-xs text-zinc-600">{hint}</p>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-white/[0.07] bg-white/[0.025] px-2 py-2">
+      <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-600">
+        {label}
+      </p>
+      <p className="mt-1 text-xs font-black text-zinc-300">{value}</p>
+    </div>
+  );
+}
+
+function EmptyState({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="px-6 py-14 text-center">
+      <p className="font-black text-zinc-300">{title}</p>
+      <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-zinc-600">
+        {body}
+      </p>
     </div>
   );
 }

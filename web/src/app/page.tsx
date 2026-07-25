@@ -1,9 +1,7 @@
 import { FeeSection } from "@/components/FeeSection";
 import { Footer } from "@/components/Footer";
 import { Hero } from "@/components/Hero";
-import { LaunchGrid } from "@/components/LaunchGrid";
 import { Navbar } from "@/components/Navbar";
-import { Stats } from "@/components/Stats";
 import { WhyKodiak } from "@/components/WhyKodiak";
 import { LiveActivity } from "@/components/LiveActivity";
 
@@ -17,10 +15,8 @@ export default function Home() {
 
       <Navbar />
       <Hero />
-      <Stats />
-      <LiveActivity />
-      <LaunchGrid />
-      <WhyKodiak />
+<LiveActivity />
+<WhyKodiak />
       <FeeSection />
       <Footer />
     </main>

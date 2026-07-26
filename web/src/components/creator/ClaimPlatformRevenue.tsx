@@ -24,6 +24,13 @@ type KodiakConfigResponse = {
   platformId?: string;
 };
 
+type RevenueRecordResponse = {
+  recorded?: boolean;
+  claimedSol?: number;
+  totalClaimedSol?: number;
+  error?: string;
+};
+
 function signatureFrom(value: unknown): string | undefined {
   if (typeof value === "string" && value.length > 20) return value;
   if (!value || typeof value !== "object") return undefined;
@@ -126,12 +133,41 @@ export function ClaimPlatformRevenue() {
   }, [connection]);
 
   useEffect(() => {
-  const timer = window.setTimeout(() => {
-    void refreshClaimableBalance();
-  }, 0);
+    const timer = window.setTimeout(() => {
+      void refreshClaimableBalance();
+    }, 0);
 
-  return () => window.clearTimeout(timer);
-}, [refreshClaimableBalance]);
+    return () => window.clearTimeout(timer);
+  }, [refreshClaimableBalance]);
+
+  async function recordVerifiedClaim(
+    signature: string,
+  ): Promise<RevenueRecordResponse> {
+    const response = await fetch(
+      "/api/admin/revenue",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          signature,
+        }),
+      },
+    );
+
+    const payload =
+      (await response.json()) as RevenueRecordResponse;
+
+    if (!response.ok) {
+      throw new Error(
+        payload.error ??
+          `Revenue accounting failed (${response.status}).`,
+      );
+    }
+
+    return payload;
+  }
 
   async function claimRevenue() {
     if (
@@ -215,10 +251,35 @@ export function ClaimPlatformRevenue() {
       const signature =
         signatureFrom(result);
 
+      if (!signature) {
+        throw new Error(
+          "Raydium confirmed the claim, but Kodiak could not read the transaction signature.",
+        );
+      }
+
+      setStatus({
+        kind: "working",
+        message:
+          "Claim confirmed. Verifying and recording revenue...",
+      });
+
+      const accounting =
+        await recordVerifiedClaim(signature);
+
+      const claimed =
+        typeof accounting.claimedSol === "number"
+          ? accounting.claimedSol
+          : null;
+
+      const claimedText =
+        claimed === null
+          ? ""
+          : ` ${claimed.toFixed(9)} SOL was verified and recorded.`;
+
       setStatus({
         kind: "success",
         message:
-          "Raydium confirmed Kodiak's platform-revenue claim on Devnet.",
+          `Raydium confirmed Kodiak's platform-revenue claim on Devnet.${claimedText}`,
         signature,
       });
 

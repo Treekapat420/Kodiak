@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useEffect, useState } from "react";
 import { ClaimCreatorRewards } from "@/components/creator/ClaimCreatorRewards";
+import { ClaimPlatformRevenue } from "@/components/creator/ClaimPlatformRevenue";
 
 type Launch = {
   mint: string;
@@ -141,6 +142,7 @@ export default function DashboardPage() {
         </section>
 
                 <ClaimCreatorRewards />
+                <ClaimPlatformRevenue />
 
         <section className="mt-6 grid gap-6 lg:grid-cols-2">
           <Card title="Fee ledger totals" eyebrow="Revenue accounting">

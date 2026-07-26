@@ -110,7 +110,7 @@ export function ClaimPlatformRevenue() {
         message: "Approve the Kodiak platform-revenue claim in Phantom...",
       });
 
-      const result = await execute({ sendAndConfirm: true });
+      const result = await execute({ sendAndConfirm: true, sequentially: true, });
       const signature = signatureFrom(result);
 
       setStatus({

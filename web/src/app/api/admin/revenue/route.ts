@@ -299,7 +299,7 @@ export async function POST(
       const claimed =
         preAmount - postAmount;
 
-      if (claimed <= 0n) {
+      if (claimed <= BigInt(0)) {
         throw new Error(
           "No positive Kodiak platform-fee withdrawal was found in this transaction.",
         );

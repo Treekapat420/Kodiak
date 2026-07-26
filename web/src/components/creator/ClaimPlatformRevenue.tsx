@@ -244,12 +244,25 @@ export function ClaimPlatformRevenue() {
       });
 
       const result = await execute({
-        sendAndConfirm: true,
-        sequentially: true,
-      });
+  sendAndConfirm: true,
+  sequentially: true,
+});
 
-      const signature =
-        signatureFrom(result);
+const debugResult = JSON.stringify(
+  result,
+  (_key, value) =>
+    typeof value === "bigint"
+      ? value.toString()
+      : value,
+  2,
+);
+
+setStatus({
+  kind: "error",
+  message: `DEBUG EXECUTE RESULT: ${debugResult}`,
+});
+
+return;
 
       if (!signature) {
         throw new Error(

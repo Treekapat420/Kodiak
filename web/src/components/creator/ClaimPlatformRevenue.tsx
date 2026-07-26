@@ -126,8 +126,12 @@ export function ClaimPlatformRevenue() {
   }, [connection]);
 
   useEffect(() => {
+  const timer = window.setTimeout(() => {
     void refreshClaimableBalance();
-  }, [refreshClaimableBalance]);
+  }, 0);
+
+  return () => window.clearTimeout(timer);
+}, [refreshClaimableBalance]);
 
   async function claimRevenue() {
     if (

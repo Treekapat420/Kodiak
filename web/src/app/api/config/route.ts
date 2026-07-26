@@ -9,6 +9,7 @@ const CONFIG_KEY = "kodiak:config:v1";
 const defaultConfig = {
   version: 1,
   network: "devnet",
+  platformId: "D33yYxh4JRtdeyLq7sFD8MzSjdtUa3uNFsSk39QHY8yT",
   tradingFeeBps: 120,
   infrastructureFeeBps: 25,
   regularCreatorFeeBps: 45,

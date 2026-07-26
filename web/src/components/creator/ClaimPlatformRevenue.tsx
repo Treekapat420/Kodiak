@@ -263,41 +263,7 @@ setStatus({
 });
 
 return;
-
-      if (!signature) {
-        throw new Error(
-          "Raydium confirmed the claim, but Kodiak could not read the transaction signature.",
-        );
-      }
-
-      setStatus({
-        kind: "working",
-        message:
-          "Claim confirmed. Verifying and recording revenue...",
-      });
-
-      const accounting =
-        await recordVerifiedClaim(signature);
-
-      const claimed =
-        typeof accounting.claimedSol === "number"
-          ? accounting.claimedSol
-          : null;
-
-      const claimedText =
-        claimed === null
-          ? ""
-          : ` ${claimed.toFixed(9)} SOL was verified and recorded.`;
-
-      setStatus({
-        kind: "success",
-        message:
-          `Raydium confirmed Kodiak's platform-revenue claim on Devnet.${claimedText}`,
-        signature,
-      });
-
-      await refreshClaimableBalance();
-    } catch (error) {
+} catch (error) {
       setStatus({
         kind: "error",
         message:

@@ -5,11 +5,13 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { useEffect, useState } from "react";
 
+import { NATIVE_MINT } from "@solana/spl-token";
+
 import {
   DEVNET_LAUNCHPAD_PROGRAM_ID,
-  NATIVE_MINT,
   loadDevnetRaydium,
 } from "@/lib/raydium/devnet";
+``
 
 const TEST_MINT = "5Kh83v5za9gToxPqEThDAHSg9RUKHKdHoQh6QCkGZmze";
 

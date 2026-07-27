@@ -36,8 +36,28 @@ const CLAIM_SIGNATURE_PREFIX =
 const DEFAULT_PLATFORM_ID =
   "D33yYxh4JRtdeyLq7sFD8MzSjdtUa3uNFsSk39QHY8yT";
 
+const CREATOR_SUCCESS_FUND_BPS = 500;
+const BPS_DENOMINATOR = 10_000;
+
 function solFromLamports(lamports: number): number {
   return lamports / LAMPORTS_PER_SOL;
+}
+
+function splitRevenueLamports(totalLamports: number) {
+  // Integer math keeps accounting exact at the lamport level.
+  // Any fractional-lamport remainder stays with Kodiak operating revenue.
+  const creatorSuccessFundLamports = Math.floor(
+    (totalLamports * CREATOR_SUCCESS_FUND_BPS) / BPS_DENOMINATOR,
+  );
+  const kodiakOperatingLamports =
+    totalLamports - creatorSuccessFundLamports;
+
+  return {
+    creatorSuccessFundLamports,
+    creatorSuccessFundSol: solFromLamports(creatorSuccessFundLamports),
+    kodiakOperatingLamports,
+    kodiakOperatingSol: solFromLamports(kodiakOperatingLamports),
+  };
 }
 
 async function getPlatformId(): Promise<PublicKey> {
@@ -119,10 +139,26 @@ export async function GET() {
         )) ?? 0,
       ) || undefined;
 
+    const lifetimeSplit =
+      splitRevenueLamports(claimedLamports);
+
     return NextResponse.json({
       claimedLamports,
       claimedSol:
         solFromLamports(claimedLamports),
+
+      creatorSuccessFundPercent: 5,
+      creatorSuccessFundLamports:
+        lifetimeSplit.creatorSuccessFundLamports,
+      creatorSuccessFundSol:
+        lifetimeSplit.creatorSuccessFundSol,
+
+      kodiakOperatingPercent: 95,
+      kodiakOperatingLamports:
+        lifetimeSplit.kodiakOperatingLamports,
+      kodiakOperatingSol:
+        lifetimeSplit.kodiakOperatingSol,
+
       claimCount,
       lastClaimSignature,
       updatedAt,
@@ -376,14 +412,34 @@ export async function POST(
         "recorded",
       );
 
+      const claimSplit =
+        splitRevenueLamports(claimedLamports);
+
+      const lifetimeSplit =
+        splitRevenueLamports(
+          Number(totalClaimedLamports),
+        );
+
       return NextResponse.json({
         recorded: true,
         signature,
+
         claimedLamports,
         claimedSol:
           solFromLamports(
             claimedLamports,
           ),
+
+        creatorSuccessFundPercent: 5,
+        claimCreatorSuccessFundLamports:
+          claimSplit.creatorSuccessFundLamports,
+        claimCreatorSuccessFundSol:
+          claimSplit.creatorSuccessFundSol,
+        claimKodiakOperatingLamports:
+          claimSplit.kodiakOperatingLamports,
+        claimKodiakOperatingSol:
+          claimSplit.kodiakOperatingSol,
+
         totalClaimedLamports:
           Number(
             totalClaimedLamports,
@@ -394,6 +450,17 @@ export async function POST(
               totalClaimedLamports,
             ),
           ),
+
+        totalCreatorSuccessFundLamports:
+          lifetimeSplit.creatorSuccessFundLamports,
+        totalCreatorSuccessFundSol:
+          lifetimeSplit.creatorSuccessFundSol,
+
+        totalKodiakOperatingLamports:
+          lifetimeSplit.kodiakOperatingLamports,
+        totalKodiakOperatingSol:
+          lifetimeSplit.kodiakOperatingSol,
+
         claimCount:
           Number(claimCount),
         updatedAt,

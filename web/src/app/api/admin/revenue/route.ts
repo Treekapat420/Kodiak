@@ -5,6 +5,7 @@ import {
   Connection,
   LAMPORTS_PER_SOL,
   PublicKey,
+  type VersionedTransactionResponse,
 } from "@solana/web3.js";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -35,9 +36,7 @@ const CLAIM_SIGNATURE_PREFIX =
 const DEFAULT_PLATFORM_ID =
   "D33yYxh4JRtdeyLq7sFD8MzSjdtUa3uNFsSk39QHY8yT";
 
-function solFromLamports(
-  lamports: number,
-): number {
+function solFromLamports(lamports: number): number {
   return lamports / LAMPORTS_PER_SOL;
 }
 
@@ -55,6 +54,39 @@ async function getPlatformId(): Promise<PublicKey> {
       : DEFAULT_PLATFORM_ID;
 
   return new PublicKey(platformId);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getTransactionWithRetry(
+  connection: Connection,
+  signature: string,
+): Promise<VersionedTransactionResponse | null> {
+  const attempts = 12;
+  const delayMs = 1250;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const transaction =
+      await connection.getTransaction(
+        signature,
+        {
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0,
+        },
+      );
+
+    if (transaction) {
+      return transaction;
+    }
+
+    if (attempt < attempts) {
+      await sleep(delayMs);
+    }
+  }
+
+  return null;
 }
 
 export async function GET() {
@@ -174,17 +206,14 @@ export async function POST(
       );
 
       const transaction =
-        await connection.getTransaction(
+        await getTransactionWithRetry(
+          connection,
           signature,
-          {
-            commitment: "confirmed",
-            maxSupportedTransactionVersion: 0,
-          },
         );
 
       if (!transaction) {
         throw new Error(
-          "The Devnet transaction could not be found.",
+          "The Devnet transaction is confirmed by the wallet but has not reached Kodiak's verification RPC yet. Please wait a few seconds and try recording again.",
         );
       }
 
@@ -349,30 +378,24 @@ export async function POST(
 
       return NextResponse.json({
         recorded: true,
-
         signature,
-
         claimedLamports,
         claimedSol:
           solFromLamports(
             claimedLamports,
           ),
-
         totalClaimedLamports:
           Number(
             totalClaimedLamports,
           ),
-
         totalClaimedSol:
           solFromLamports(
             Number(
               totalClaimedLamports,
             ),
           ),
-
         claimCount:
           Number(claimCount),
-
         updatedAt,
       });
     } catch (error) {

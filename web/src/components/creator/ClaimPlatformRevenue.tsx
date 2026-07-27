@@ -1,10 +1,14 @@
 "use client";
 
-import { getPdaPlatformVault, TxVersion } from "@raydium-io/raydium-sdk-v2";
+import {
+  getPdaPlatformVault,
+  TxVersion,
+} from "@raydium-io/raydium-sdk-v2";
 import { NATIVE_MINT } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { useCallback, useEffect, useState } from "react";
+
 import {
   DEVNET_LAUNCHPAD_PROGRAM_ID,
   loadDevnetRaydium,
@@ -20,6 +24,14 @@ type KodiakConfigResponse = {
   platformId?: string;
 };
 
+type RevenueRecordResponse = {
+  recorded?: boolean;
+  claimedSol?: number;
+  totalClaimedSol?: number;
+  claimCount?: number;
+  error?: string;
+};
+
 function signatureFrom(value: unknown): string | undefined {
   if (typeof value === "string" && value.length > 20) return value;
   if (!value || typeof value !== "object") return undefined;
@@ -28,6 +40,7 @@ function signatureFrom(value: unknown): string | undefined {
 
   for (const key of ["signature", "txId", "txid", "id"]) {
     const candidate = record[key];
+
     if (typeof candidate === "string" && candidate.length > 20) {
       return candidate;
     }
@@ -37,6 +50,7 @@ function signatureFrom(value: unknown): string | undefined {
     const first = record.txIds.find(
       (item) => typeof item === "string" && item.length > 20,
     );
+
     if (typeof first === "string") return first;
   }
 
@@ -45,7 +59,12 @@ function signatureFrom(value: unknown): string | undefined {
 
 export function ClaimPlatformRevenue() {
   const { connection } = useConnection();
-  const { connected, publicKey, signAllTransactions } = useWallet();
+
+  const {
+    connected,
+    publicKey,
+    signAllTransactions,
+  } = useWallet();
 
   const [status, setStatus] = useState<Status>({
     kind: "idle",
@@ -53,8 +72,11 @@ export function ClaimPlatformRevenue() {
       "Claims Kodiak's accumulated Raydium LaunchLab platform fees on Devnet.",
   });
 
-  const [claimableSol, setClaimableSol] = useState<number | null>(null);
-  const [balanceLoading, setBalanceLoading] = useState(true);
+  const [claimableSol, setClaimableSol] =
+    useState<number | null>(null);
+
+  const [balanceLoading, setBalanceLoading] =
+    useState(true);
 
   const busy = status.kind === "working";
 
@@ -62,7 +84,9 @@ export function ClaimPlatformRevenue() {
     setBalanceLoading(true);
 
     try {
-      const response = await fetch("/api/config", { cache: "no-store" });
+      const response = await fetch("/api/config", {
+        cache: "no-store",
+      });
 
       if (!response.ok) {
         throw new Error(
@@ -70,25 +94,39 @@ export function ClaimPlatformRevenue() {
         );
       }
 
-      const config = (await response.json()) as KodiakConfigResponse;
+      const config =
+        (await response.json()) as KodiakConfigResponse;
 
       if (!config.platformId) {
-        throw new Error("Kodiak PlatformConfig ID is not available.");
+        throw new Error(
+          "Kodiak PlatformConfig ID is not available.",
+        );
       }
 
-      const platformId = new PublicKey(config.platformId);
+      const platformId =
+        new PublicKey(config.platformId);
 
-      const platformVault = getPdaPlatformVault(
-        DEVNET_LAUNCHPAD_PROGRAM_ID,
-        platformId,
-        NATIVE_MINT,
-      ).publicKey;
+      const platformVault =
+        getPdaPlatformVault(
+          DEVNET_LAUNCHPAD_PROGRAM_ID,
+          platformId,
+          NATIVE_MINT,
+        ).publicKey;
 
-      const balance = await connection.getTokenAccountBalance(platformVault);
+      const balance =
+        await connection.getTokenAccountBalance(
+          platformVault,
+        );
 
-      setClaimableSol(Number(balance.value.uiAmountString ?? "0"));
+      setClaimableSol(
+        Number(balance.value.uiAmountString ?? "0"),
+      );
     } catch (error) {
-      console.error("Unable to read Kodiak platform-fee vault:", error);
+      console.error(
+        "Unable to read Kodiak platform-fee vault:",
+        error,
+      );
+
       setClaimableSol(null);
     } finally {
       setBalanceLoading(false);
@@ -103,22 +141,60 @@ export function ClaimPlatformRevenue() {
     return () => window.clearTimeout(timer);
   }, [refreshClaimableBalance]);
 
+  async function recordVerifiedClaim(
+    signature: string,
+  ): Promise<RevenueRecordResponse> {
+    const response = await fetch(
+      "/api/admin/revenue",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          signature,
+        }),
+      },
+    );
+
+    const payload =
+      (await response.json()) as RevenueRecordResponse;
+
+    if (!response.ok) {
+      throw new Error(
+        payload.error ??
+          `Revenue accounting failed (${response.status}).`,
+      );
+    }
+
+    return payload;
+  }
+
   async function claimRevenue() {
-    if (!connected || !publicKey || !signAllTransactions) {
+    if (
+      !connected ||
+      !publicKey ||
+      !signAllTransactions
+    ) {
       setStatus({
         kind: "error",
-        message: "Connect the authorized Kodiak platform wallet first.",
+        message:
+          "Connect the authorized Kodiak platform wallet first.",
       });
+
       return;
     }
 
     try {
       setStatus({
         kind: "working",
-        message: "Loading Kodiak's Raydium PlatformConfig...",
+        message:
+          "Loading Kodiak's Raydium PlatformConfig...",
       });
 
-      const response = await fetch("/api/config", { cache: "no-store" });
+      const response = await fetch("/api/config", {
+        cache: "no-store",
+      });
 
       if (!response.ok) {
         throw new Error(
@@ -126,49 +202,95 @@ export function ClaimPlatformRevenue() {
         );
       }
 
-      const config = (await response.json()) as KodiakConfigResponse;
+      const config =
+        (await response.json()) as KodiakConfigResponse;
 
       if (!config.platformId) {
-        throw new Error("Kodiak PlatformConfig ID is not available.");
+        throw new Error(
+          "Kodiak PlatformConfig ID is not available.",
+        );
       }
 
-      const platformId = new PublicKey(config.platformId);
+      const platformId =
+        new PublicKey(config.platformId);
 
-      const raydium = await loadDevnetRaydium({
-        connection,
-        owner: publicKey,
-        signAllTransactions,
-      });
-
-      setStatus({
-        kind: "working",
-        message: "Building Kodiak's platform-vault claim...",
-      });
-
-      const { execute } = await raydium.launchpad.claimVaultPlatformFee({
-        programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
-        platformId,
-        mintB: NATIVE_MINT,
-        claimFeeWallet: publicKey,
-        txVersion: TxVersion.V0,
-        feePayer: publicKey,
-      });
+      const raydium =
+        await loadDevnetRaydium({
+          connection,
+          owner: publicKey,
+          signAllTransactions,
+        });
 
       setStatus({
         kind: "working",
-        message: "Approve the Kodiak platform-revenue claim in Phantom...",
+        message:
+          "Building Kodiak's platform-vault claim...",
+      });
+
+      const { execute } =
+        await raydium.launchpad.claimVaultPlatformFee({
+          programId:
+            DEVNET_LAUNCHPAD_PROGRAM_ID,
+          platformId,
+          mintB: NATIVE_MINT,
+          claimFeeWallet:
+            publicKey,
+          txVersion: TxVersion.V0,
+          feePayer: publicKey,
+        });
+
+      setStatus({
+        kind: "working",
+        message:
+          "Approve the Kodiak platform-revenue claim in Phantom...",
       });
 
       const result = await execute({
         sendAndConfirm: true,
       });
 
-      const signature = signatureFrom(result);
+      const signature =
+        signatureFrom(result);
+
+      if (!signature) {
+        throw new Error(
+          "Raydium confirmed the claim, but Kodiak could not read the transaction signature.",
+        );
+      }
+
+      setStatus({
+        kind: "working",
+        message:
+          "Claim confirmed. Verifying and recording revenue...",
+      });
+
+      const accounting =
+        await recordVerifiedClaim(signature);
+
+      const claimed =
+        typeof accounting.claimedSol === "number"
+          ? accounting.claimedSol
+          : null;
+
+      const total =
+        typeof accounting.totalClaimedSol === "number"
+          ? accounting.totalClaimedSol
+          : null;
+
+      const verifiedText =
+        claimed === null
+          ? ""
+          : ` ${claimed.toFixed(9)} SOL was verified and recorded.`;
+
+      const lifetimeText =
+        total === null
+          ? ""
+          : ` Lifetime claimed revenue is now ${total.toFixed(9)} SOL.`;
 
       setStatus({
         kind: "success",
         message:
-          "Raydium confirmed Kodiak's platform-vault revenue claim on Devnet.",
+          `Raydium confirmed Kodiak's platform-vault revenue claim on Devnet.${verifiedText}${lifetimeText}`,
         signature,
       });
 
@@ -197,8 +319,10 @@ export function ClaimPlatformRevenue() {
           </h2>
 
           <p className="mt-2 text-sm leading-6 text-zinc-500">
-            Claims accumulated Raydium LaunchLab platform fees for Kodiak&apos;s
-            PlatformConfig. This is completely separate from creator rewards.
+            Claims accumulated Raydium LaunchLab
+            platform fees for Kodiak&apos;s
+            PlatformConfig. This is completely
+            separate from creator rewards.
           </p>
         </div>
       </div>
@@ -217,26 +341,35 @@ export function ClaimPlatformRevenue() {
         </p>
 
         <p className="mt-1 text-xs text-zinc-600">
-          Live balance from Kodiak&apos;s on-chain Raydium platform-fee vault.
+          Live balance from Kodiak&apos;s on-chain
+          Raydium platform-fee vault.
         </p>
 
         <button
           type="button"
-          onClick={() => void refreshClaimableBalance()}
+          onClick={() =>
+            void refreshClaimableBalance()
+          }
           disabled={balanceLoading}
           className="mt-3 rounded-xl border border-white/10 px-3 py-2 text-xs font-black text-zinc-400 transition hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {balanceLoading ? "Refreshing..." : "Refresh balance"}
+          {balanceLoading
+            ? "Refreshing..."
+            : "Refresh balance"}
         </button>
       </div>
 
       <button
         type="button"
         disabled={!connected || busy}
-        onClick={() => void claimRevenue()}
+        onClick={() =>
+          void claimRevenue()
+        }
         className="mt-5 w-full rounded-xl bg-amber-300 px-5 py-3 text-sm font-black text-black transition disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {busy ? "Claiming..." : "Claim Kodiak Revenue on Devnet"}
+        {busy
+          ? "Claiming..."
+          : "Claim Kodiak Revenue on Devnet"}
       </button>
 
       <div
@@ -248,9 +381,12 @@ export function ClaimPlatformRevenue() {
               : "border-white/10 bg-black/20 text-zinc-500"
         }`}
       >
-        <p className="font-bold">{status.message}</p>
+        <p className="font-bold">
+          {status.message}
+        </p>
 
-        {status.kind === "success" && status.signature ? (
+        {status.kind === "success" &&
+        status.signature ? (
           <a
             href={`https://explorer.solana.com/tx/${status.signature}?cluster=devnet`}
             target="_blank"
@@ -263,8 +399,9 @@ export function ClaimPlatformRevenue() {
       </div>
 
       <p className="mt-4 text-xs leading-5 text-zinc-600">
-        Only the wallet configured as Kodiak&apos;s platform claim-fee wallet
-        should authorize this transaction.
+        Only the wallet configured as Kodiak&apos;s
+        platform claim-fee wallet should authorize
+        this transaction.
       </p>
     </section>
   );

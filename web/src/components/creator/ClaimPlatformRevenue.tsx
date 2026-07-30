@@ -6,7 +6,7 @@ import {
 } from "@raydium-io/raydium-sdk-v2";
 import { NATIVE_MINT } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { useCallback, useEffect, useState } from "react";
 
 import {
@@ -17,8 +17,18 @@ import {
 type Status =
   | { kind: "idle"; message: string }
   | { kind: "working"; message: string }
-  | { kind: "success"; message: string; signature?: string }
-  | { kind: "error"; message: string };
+  | {
+      kind: "success";
+      message: string;
+      signature?: string;
+      fundSignature?: string;
+    }
+  | {
+      kind: "error";
+      message: string;
+      signature?: string;
+      fundSignature?: string;
+    };
 
 type KodiakConfigResponse = {
   platformId?: string;
@@ -28,6 +38,8 @@ type RevenueRecordResponse = {
   recorded?: boolean;
   claimedSol?: number;
   totalClaimedSol?: number;
+  claimCreatorSuccessFundLamports?: number;
+  claimCreatorSuccessFundSol?: number;
   totalCreatorSuccessFundSol?: number;
   totalKodiakOperatingSol?: number;
   claimCount?: number;
@@ -46,6 +58,10 @@ type RevenueSummaryResponse = {
   updatedAt?: number;
   error?: string;
 };
+
+const CREATOR_SUCCESS_FUND_WALLET = new PublicKey(
+  "EJeXJ7Bf6nyJ2p4i7kR8Wyfdmi3JgpdU3iDRMCzZheWG",
+);
 
 function signatureFrom(value: unknown): string | undefined {
   if (typeof value === "string" && value.length > 20) return value;
@@ -79,6 +95,7 @@ export function ClaimPlatformRevenue() {
     connected,
     publicKey,
     signAllTransactions,
+    sendTransaction,
   } = useWallet();
 
   const [status, setStatus] = useState<Status>({
@@ -223,6 +240,61 @@ export function ClaimPlatformRevenue() {
     return payload;
   }
 
+  async function sendCreatorSuccessFundTransfer(
+    lamports: number,
+  ): Promise<string | undefined> {
+    if (!publicKey) {
+      throw new Error(
+        "The authorized Kodiak wallet is not connected.",
+      );
+    }
+
+    if (!Number.isSafeInteger(lamports) || lamports <= 0) {
+      return undefined;
+    }
+
+    const latestBlockhash =
+      await connection.getLatestBlockhash("confirmed");
+
+    const transaction = new Transaction({
+      feePayer: publicKey,
+      recentBlockhash: latestBlockhash.blockhash,
+    }).add(
+      SystemProgram.transfer({
+        fromPubkey: publicKey,
+        toPubkey: CREATOR_SUCCESS_FUND_WALLET,
+        lamports,
+      }),
+    );
+
+    const fundSignature = await sendTransaction(
+      transaction,
+      connection,
+      {
+        skipPreflight: false,
+      },
+    );
+
+    const confirmation =
+      await connection.confirmTransaction(
+        {
+          signature: fundSignature,
+          blockhash: latestBlockhash.blockhash,
+          lastValidBlockHeight:
+            latestBlockhash.lastValidBlockHeight,
+        },
+        "confirmed",
+      );
+
+    if (confirmation.value.err) {
+      throw new Error(
+        "The Creator Success Fund transfer failed to confirm.",
+      );
+    }
+
+    return fundSignature;
+  }
+
   async function claimRevenue() {
     if (
       !connected ||
@@ -340,11 +412,59 @@ export function ClaimPlatformRevenue() {
           ? ""
           : ` Lifetime claimed revenue is now ${total.toFixed(9)} SOL.`;
 
+      const fundLamports =
+        typeof accounting.claimCreatorSuccessFundLamports === "number"
+          ? accounting.claimCreatorSuccessFundLamports
+          : 0;
+
+      let fundSignature: string | undefined;
+
+      if (fundLamports > 0) {
+        setStatus({
+          kind: "working",
+          message:
+            "Revenue recorded. Approve the separate 5% Creator Success Fund transfer in your wallet...",
+        });
+
+        try {
+          fundSignature =
+            await sendCreatorSuccessFundTransfer(
+              fundLamports,
+            );
+        } catch (fundError) {
+          await Promise.all([
+            refreshClaimableBalance(),
+            refreshRevenueSummary(),
+          ]);
+
+          setStatus({
+            kind: "error",
+            message:
+              `The platform claim succeeded and revenue was recorded, but the 5% Creator Success Fund transfer did not complete. The reserved 5% remains in the Kodiak wallet. ${
+                fundError instanceof Error
+                  ? fundError.message
+                  : ""
+              }`.trim(),
+            signature,
+          });
+
+          return;
+        }
+      }
+
+      const fundText =
+        fundLamports > 0
+          ? ` The 5% Creator Success Fund allocation (${(
+              fundLamports / 1_000_000_000
+            ).toFixed(9)} SOL) was transferred on-chain.`
+          : "";
+
       setStatus({
         kind: "success",
         message:
-          `Raydium confirmed Kodiak's platform-vault revenue claim on Devnet.${verifiedText}${lifetimeText}`,
+          `Raydium confirmed Kodiak's platform-vault revenue claim on Devnet.${verifiedText}${lifetimeText}${fundText}`,
         signature,
+        fundSignature,
       });
 
       await Promise.all([
@@ -430,7 +550,10 @@ export function ClaimPlatformRevenue() {
                   : `${revenueSummary.creatorSuccessFundSol.toFixed(9)} SOL`}
             </p>
             <p className="mt-1 text-xs leading-5 text-zinc-600">
-              Reserved accounting allocation. No separate wallet transfer yet.
+              Reserved 5% accounting allocation. New claims are transferred to the dedicated Success Fund wallet after verification.
+            </p>
+            <p className="mt-2 break-all text-[11px] leading-5 text-zinc-700">
+              Fund wallet: {CREATOR_SUCCESS_FUND_WALLET.toBase58()}
             </p>
           </div>
 
@@ -538,6 +661,18 @@ export function ClaimPlatformRevenue() {
             className="mt-2 inline-block break-all text-xs font-black text-amber-300 underline underline-offset-4"
           >
             View Devnet transaction
+          </a>
+        ) : null}
+
+        {"fundSignature" in status &&
+        status.fundSignature ? (
+          <a
+            href={`https://explorer.solana.com/tx/${status.fundSignature}?cluster=devnet`}
+            target="_blank"
+            rel="noreferrer"
+            className="ml-0 mt-2 block break-all text-xs font-black text-emerald-300 underline underline-offset-4 sm:ml-4 sm:inline-block"
+          >
+            View Success Fund transfer
           </a>
         ) : null}
       </div>

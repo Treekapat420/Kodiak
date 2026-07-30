@@ -28,7 +28,22 @@ type RevenueRecordResponse = {
   recorded?: boolean;
   claimedSol?: number;
   totalClaimedSol?: number;
+  totalCreatorSuccessFundSol?: number;
+  totalKodiakOperatingSol?: number;
   claimCount?: number;
+  updatedAt?: number;
+  error?: string;
+};
+
+type RevenueSummaryResponse = {
+  claimedSol?: number;
+  creatorSuccessFundPercent?: number;
+  creatorSuccessFundSol?: number;
+  kodiakOperatingPercent?: number;
+  kodiakOperatingSol?: number;
+  claimCount?: number;
+  lastClaimSignature?: string;
+  updatedAt?: number;
   error?: string;
 };
 
@@ -76,6 +91,12 @@ export function ClaimPlatformRevenue() {
     useState<number | null>(null);
 
   const [balanceLoading, setBalanceLoading] =
+    useState(true);
+
+  const [revenueSummary, setRevenueSummary] =
+    useState<RevenueSummaryResponse | null>(null);
+
+  const [revenueLoading, setRevenueLoading] =
     useState(true);
 
   const busy = status.kind === "working";
@@ -133,13 +154,45 @@ export function ClaimPlatformRevenue() {
     }
   }, [connection]);
 
+  const refreshRevenueSummary = useCallback(async () => {
+    setRevenueLoading(true);
+
+    try {
+      const response = await fetch("/api/admin/revenue", {
+        cache: "no-store",
+      });
+
+      const payload =
+        (await response.json()) as RevenueSummaryResponse;
+
+      if (!response.ok) {
+        throw new Error(
+          payload.error ??
+            `Unable to load revenue accounting (${response.status}).`,
+        );
+      }
+
+      setRevenueSummary(payload);
+    } catch (error) {
+      console.error(
+        "Unable to load Kodiak revenue accounting:",
+        error,
+      );
+
+      setRevenueSummary(null);
+    } finally {
+      setRevenueLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void refreshClaimableBalance();
+      void refreshRevenueSummary();
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [refreshClaimableBalance]);
+  }, [refreshClaimableBalance, refreshRevenueSummary]);
 
   async function recordVerifiedClaim(
     signature: string,
@@ -294,7 +347,10 @@ export function ClaimPlatformRevenue() {
         signature,
       });
 
-      await refreshClaimableBalance();
+      await Promise.all([
+        refreshClaimableBalance(),
+        refreshRevenueSummary(),
+      ]);
     } catch (error) {
       setStatus({
         kind: "error",
@@ -324,6 +380,94 @@ export function ClaimPlatformRevenue() {
             PlatformConfig. This is completely
             separate from creator rewards.
           </p>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-500">
+              Verified revenue accounting
+            </p>
+            <p className="mt-1 text-xs leading-5 text-zinc-600">
+              Lifetime totals from verified Devnet platform-fee claims.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void refreshRevenueSummary()}
+            disabled={revenueLoading}
+            className="shrink-0 rounded-xl border border-white/10 px-3 py-2 text-xs font-black text-zinc-400 transition hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {revenueLoading ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-zinc-500">
+              Lifetime platform revenue
+            </p>
+            <p className="mt-2 text-xl font-black text-zinc-100">
+              {revenueLoading
+                ? "Loading..."
+                : revenueSummary?.claimedSol === undefined
+                  ? "Unavailable"
+                  : `${revenueSummary.claimedSol.toFixed(9)} SOL`}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4">
+            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-emerald-300">
+              Creator Success Fund Â· 5%
+            </p>
+            <p className="mt-2 text-xl font-black text-emerald-200">
+              {revenueLoading
+                ? "Loading..."
+                : revenueSummary?.creatorSuccessFundSol === undefined
+                  ? "Unavailable"
+                  : `${revenueSummary.creatorSuccessFundSol.toFixed(9)} SOL`}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-zinc-600">
+              Reserved accounting allocation. No separate wallet transfer yet.
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.04] p-4">
+            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-amber-300">
+              Kodiak operating revenue Â· 95%
+            </p>
+            <p className="mt-2 text-xl font-black text-amber-200">
+              {revenueLoading
+                ? "Loading..."
+                : revenueSummary?.kodiakOperatingSol === undefined
+                  ? "Unavailable"
+                  : `${revenueSummary.kodiakOperatingSol.toFixed(9)} SOL`}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2 rounded-2xl border border-white/10 bg-black/20 p-4 text-xs text-zinc-500 sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            Verified claims:{" "}
+            <span className="font-black text-zinc-300">
+              {revenueLoading
+                ? "..."
+                : revenueSummary?.claimCount ?? 0}
+            </span>
+          </p>
+
+          {revenueSummary?.lastClaimSignature ? (
+            <a
+              href={`https://explorer.solana.com/tx/${revenueSummary.lastClaimSignature}?cluster=devnet`}
+              target="_blank"
+              rel="noreferrer"
+              className="font-black text-amber-300 underline underline-offset-4"
+            >
+              View latest claim
+            </a>
+          ) : null}
         </div>
       </div>
 

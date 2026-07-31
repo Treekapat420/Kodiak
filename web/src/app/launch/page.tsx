@@ -19,6 +19,7 @@ type FormState = {
   name: string;
   symbol: string;
   description: string;
+  initialBuySol: string;
   x: string;
   telegram: string;
   website: string;
@@ -39,6 +40,7 @@ const initialForm: FormState = {
   telegram: "",
   website: "",
   discord: "",
+  initialBuySol: "0",
   supply: "1000000000",
   lpHandling: "burn",
   postMigrationFee: true,

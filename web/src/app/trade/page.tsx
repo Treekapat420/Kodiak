@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import BN from "bn.js";
-import { Curve, getPdaLaunchpadPoolId, PlatformConfig, TxVersion } from "@raydium-io/raydium-sdk-v2";
+import { getPdaLaunchpadPoolId, PlatformConfig, TxVersion } from "@raydium-io/raydium-sdk-v2";
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
@@ -233,22 +233,6 @@ export default function TradePage() {
       const platformInfo = PlatformConfig.decode(platformAccount.data);
       const mintInfo = await raydium.token.getTokenInfo(mintA);
       
-      const sellQuote = Curve.sellExactIn({
-        poolInfo,
-        amountA: rawSellAmount,
-        shareFeeRate: new BN(0),
-      });
-
-      const minSolOut = sellQuote.amountOut
-        .muln(99)
-        .divn(100);
-
-      if (minSolOut.lte(new BN(0))) {
-        throw new Error(
-          "The bonding curve calculated zero SOL output for this sale.",
-        );
-      }
-      
       const { transaction, extInfo, execute } = 
         await raydium.launchpad.sellToken({
         programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
@@ -261,7 +245,6 @@ export default function TradePage() {
         txVersion: TxVersion.V0,
         feePayer: publicKey,
         sellAmount: rawSellAmount,
-        minAmountB: minSolOut,
         slippage: new BN(100),
       });
       const estimatedLamports = Number(extInfo.outAmount.toString());

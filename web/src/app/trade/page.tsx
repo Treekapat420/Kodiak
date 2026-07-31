@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import BN from "bn.js";
-import { getPdaLaunchpadPoolId, PlatformConfig, TxVersion } from "@raydium-io/raydium-sdk-v2";
+import { Curve, getPdaLaunchpadPoolId, PlatformConfig, TxVersion } from "@raydium-io/raydium-sdk-v2";
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";

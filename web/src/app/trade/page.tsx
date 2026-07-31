@@ -180,22 +180,7 @@ export default function TradePage() {
       if (!platformAccount) throw new Error("The LaunchLab PlatformConfig account was not found on Devnet.");
       const platformInfo = PlatformConfig.decode(platformAccount.data);
       const mintInfo = await raydium.token.getTokenInfo(mintA);
-      const sellQuote = Curve.sellExactIn({
-  poolInfo,
-  amountA: rawSellAmount,
-  shareFeeRate: new BN(0),
-});
-
-const minSolOut = sellQuote.amountOut
-  .muln(99)
-  .divn(100);
-
-if (minSolOut.lte(new BN(0))) {
-  throw new Error(
-    "The bonding curve calculated zero SOL output for this sale.",
-  );
-}
-      
+  
       const { transaction, extInfo, execute } = await raydium.launchpad.buyToken({
         programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
         mintA,
@@ -247,7 +232,25 @@ if (minSolOut.lte(new BN(0))) {
       if (!platformAccount) throw new Error("The LaunchLab PlatformConfig account was not found on Devnet.");
       const platformInfo = PlatformConfig.decode(platformAccount.data);
       const mintInfo = await raydium.token.getTokenInfo(mintA);
-      const { transaction, extInfo, execute } = await raydium.launchpad.sellToken({
+      
+      const sellQuote = Curve.sellExactIn({
+        poolInfo,
+        amountA: rawSellAmount,
+        shareFeeRate: new BN(0),
+      });
+
+      const minSolOut = sellQuote.amountOut
+        .muln(99)
+        .divn(100);
+
+      if (minSolOut.lte(new BN(0))) {
+        throw new Error(
+          "The bonding curve calculated zero SOL output for this sale.",
+        );
+      }
+      
+      const { transaction, extInfo, execute } = 
+        await raydium.launchpad.sellToken({
         programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
         mintA,
         mintAProgram: new PublicKey(mintInfo.programId),

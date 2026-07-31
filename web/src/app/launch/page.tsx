@@ -684,6 +684,50 @@ export default function LaunchPage() {
                     className="mt-5 block w-full text-sm text-zinc-500 file:mr-4 file:rounded-xl file:border-0 file:bg-amber-300 file:px-4 file:py-3 file:font-black file:text-black"
                   />
                 </label>
+
+                <div className="rounded-3xl border border-emerald-400/20 bg-emerald-400/[0.04] p-5">
+  <div className="flex items-start justify-between gap-4">
+    <div>
+      <p className="text-sm font-black text-white">
+        Initial creator buy
+      </p>
+      <p className="mt-1 text-xs leading-5 text-zinc-500">
+        Optional. Be the first buyer of your token when it launches.
+        Leave this at 0 to launch without buying.
+      </p>
+    </div>
+
+    <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-black text-emerald-300">
+      OPTIONAL
+    </span>
+  </div>
+
+  <div className="mt-4 flex items-center rounded-2xl border border-white/10 bg-black/40 px-4">
+    <input
+      inputMode="decimal"
+      value={form.initialBuySol}
+      onChange={(event) => update("initialBuySol", event.target.value)}
+      placeholder="0"
+      className="w-full bg-transparent py-4 text-xl font-black text-white outline-none placeholder:text-zinc-700"
+    />
+    <span className="ml-3 text-sm font-black text-emerald-300">
+      SOL
+    </span>
+  </div>
+
+  <div className="mt-3 grid grid-cols-4 gap-2">
+    {["0", "0.1", "0.5", "1"].map((amount) => (
+      <button
+        key={amount}
+        type="button"
+        onClick={() => update("initialBuySol", amount)}
+        className="rounded-xl border border-white/10 bg-black/30 px-2 py-3 text-sm font-bold text-zinc-300 transition hover:border-emerald-400/40 hover:text-emerald-300"
+      >
+        {amount === "0" ? "None" : `${amount} SOL`}
+      </button>
+    ))}
+  </div>
+</div>
               </div>
             )}
 

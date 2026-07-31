@@ -182,7 +182,7 @@ export default function TradePage() {
       const mintInfo = await raydium.token.getTokenInfo(mintA);
       const sellQuote = Curve.sellExactIn({
   poolInfo,
-  amount: rawSellAmount,
+  amountA: rawSellAmount,
   shareFeeRate: new BN(0),
 });
 

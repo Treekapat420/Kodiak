@@ -523,50 +523,11 @@ export function ClaimPlatformRevenue() {
           ? ""
           : ` Lifetime claimed revenue is now ${total.toFixed(9)} SOL.`;
 
-      const pendingLamports =
-        typeof accounting.pendingCreatorSuccessFundLamports === "number"
-          ? accounting.pendingCreatorSuccessFundLamports
-          : 0;
-
-      let fundSignature: string | undefined;
-
-      if (pendingLamports > 0 && signTransaction) {
-        try {
-          fundSignature =
-            await sendAndRecordPendingFund(
-              pendingLamports,
-            );
-        } catch (fundError) {
-          await Promise.all([
-            refreshClaimableBalance(),
-            refreshRevenueSummary(),
-          ]);
-
-          setStatus({
-            kind: "error",
-            message:
-              `The platform claim succeeded and revenue was recorded, but the Creator Success Fund transfer did not complete. The allocation remains pending and can be retried without another platform claim. ${
-                fundError instanceof Error
-                  ? fundError.message
-                  : ""
-              }`.trim(),
-            signature,
-          });
-
-          return;
-        }
-      }
-
       setStatus({
         kind: "success",
         message:
-          `Raydium confirmed Kodiak's platform-vault revenue claim on Devnet.${verifiedText}${lifetimeText}${
-            fundSignature
-              ? " The pending Creator Success Fund balance was signed and submitted directly to Devnet."
-              : ""
-          }`,
+          `Raydium confirmed Kodiak's platform-vault revenue claim on Devnet.${verifiedText}${lifetimeText} The 5% Creator Success Fund allocation was recorded as pending. Devnet treasury transfers are intentionally disabled and will activate on Mainnet.`,
         signature,
-        fundSignature,
       });
 
       await Promise.all([
@@ -651,7 +612,7 @@ export function ClaimPlatformRevenue() {
                   ).toFixed(9)} SOL`}
             </p>
             <p className="text-xs text-zinc-500">
-              Pending:{" "}
+              Pending allocation:{" "}
               {revenueLoading
                 ? "..."
                 : `${pendingSol.toFixed(9)} SOL`}
@@ -672,23 +633,19 @@ export function ClaimPlatformRevenue() {
           </div>
         </div>
 
-        {pendingSol > 0 ? (
-          <button
-            type="button"
-            onClick={() => void retryPendingSuccessFund()}
-            disabled={
-              !connected ||
-              !signTransaction ||
-              busy ||
-              revenueLoading
-            }
-            className="mt-3 w-full rounded-xl border border-emerald-400/30 bg-emerald-400/[0.08] px-4 py-3 text-sm font-black text-emerald-200 disabled:opacity-40"
-          >
-            {busy
-              ? "Working..."
-              : `Send Pending Success Fund (${pendingSol.toFixed(9)} SOL)`}
-          </button>
-        ) : null}
+        <div className="mt-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.05] px-4 py-3">
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-emerald-300">
+            Devnet accounting mode
+          </p>
+          <p className="mt-1 text-xs leading-5 text-zinc-400">
+            Kodiak is tracking the 5% Creator Success Fund allocation as pending during Devnet testing. Actual treasury transfers are disabled on Devnet and will activate on Mainnet.
+          </p>
+          {pendingSol > 0 ? (
+            <p className="mt-2 text-xs font-black text-amber-300">
+              Pending for Mainnet treasury flow: {pendingSol.toFixed(9)} SOL
+            </p>
+          ) : null}
+        </div>
       </div>
 
       <div className="mt-5 rounded-2xl border border-amber-300/20 bg-black/20 p-4">

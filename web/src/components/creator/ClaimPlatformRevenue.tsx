@@ -21,8 +21,18 @@ import {
 type Status =
   | { kind: "idle"; message: string }
   | { kind: "working"; message: string }
-  | { kind: "success"; message: string; signature?: string; fundSignature?: string }
-  | { kind: "error"; message: string; signature?: string; fundSignature?: string };
+  | {
+      kind: "success";
+      message: string;
+      signature?: string;
+      fundSignature?: string;
+    }
+  | {
+      kind: "error";
+      message: string;
+      signature?: string;
+      fundSignature?: string;
+    };
 
 type KodiakConfigResponse = {
   platformId?: string;
@@ -121,7 +131,9 @@ export function ClaimPlatformRevenue() {
     setBalanceLoading(true);
 
     try {
-      const response = await fetch("/api/config", { cache: "no-store" });
+      const response = await fetch("/api/config", {
+        cache: "no-store",
+      });
 
       if (!response.ok) {
         throw new Error(
@@ -132,21 +144,31 @@ export function ClaimPlatformRevenue() {
       const config = (await response.json()) as KodiakConfigResponse;
 
       if (!config.platformId) {
-        throw new Error("Kodiak PlatformConfig ID is not available.");
+        throw new Error(
+          "Kodiak PlatformConfig ID is not available.",
+        );
       }
 
       const platformId = new PublicKey(config.platformId);
 
-      const platformVault = getPdaPlatformVault(
-        DEVNET_LAUNCHPAD_PROGRAM_ID,
-        platformId,
-        NATIVE_MINT,
-      ).publicKey;
+      const platformVault =
+        getPdaPlatformVault(
+          DEVNET_LAUNCHPAD_PROGRAM_ID,
+          platformId,
+          NATIVE_MINT,
+        ).publicKey;
 
-      const balance = await connection.getTokenAccountBalance(platformVault);
-      setClaimableSol(Number(balance.value.uiAmountString ?? "0"));
+      const balance =
+        await connection.getTokenAccountBalance(platformVault);
+
+      setClaimableSol(
+        Number(balance.value.uiAmountString ?? "0"),
+      );
     } catch (error) {
-      console.error("Unable to read Kodiak platform-fee vault:", error);
+      console.error(
+        "Unable to read Kodiak platform-fee vault:",
+        error,
+      );
       setClaimableSol(null);
     } finally {
       setBalanceLoading(false);
@@ -161,7 +183,8 @@ export function ClaimPlatformRevenue() {
         cache: "no-store",
       });
 
-      const payload = (await response.json()) as RevenueSummaryResponse;
+      const payload =
+        (await response.json()) as RevenueSummaryResponse;
 
       if (!response.ok) {
         throw new Error(
@@ -172,7 +195,10 @@ export function ClaimPlatformRevenue() {
 
       setRevenueSummary(payload);
     } catch (error) {
-      console.error("Unable to load Kodiak revenue accounting:", error);
+      console.error(
+        "Unable to load Kodiak revenue accounting:",
+        error,
+      );
       setRevenueSummary(null);
     } finally {
       setRevenueLoading(false);
@@ -193,11 +219,14 @@ export function ClaimPlatformRevenue() {
   ): Promise<RevenueRecordResponse> {
     const response = await fetch("/api/admin/revenue", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ signature }),
     });
 
-    const payload = (await response.json()) as RevenueRecordResponse;
+    const payload =
+      (await response.json()) as RevenueRecordResponse;
 
     if (!response.ok) {
       throw new Error(
@@ -214,11 +243,14 @@ export function ClaimPlatformRevenue() {
   ): Promise<FundTransferRecordResponse> {
     const response = await fetch("/api/admin/revenue", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ signature }),
     });
 
-    const payload = (await response.json()) as FundTransferRecordResponse;
+    const payload =
+      (await response.json()) as FundTransferRecordResponse;
 
     if (!response.ok) {
       throw new Error(
@@ -232,53 +264,85 @@ export function ClaimPlatformRevenue() {
 
   async function sendCreatorSuccessFundTransfer(
     lamports: number,
-  ): Promise<string | undefined> {
-    if (!publicKey || !signTransaction) {
+  ): Promise<string> {
+    if (!publicKey) {
       throw new Error(
-        "The authorized Kodiak wallet cannot sign the Success Fund transfer.",
+        "The authorized Kodiak wallet is not connected.",
+      );
+    }
+
+    if (!signTransaction) {
+      throw new Error(
+        "This wallet does not expose signTransaction().",
       );
     }
 
     if (!Number.isSafeInteger(lamports) || lamports <= 0) {
-      return undefined;
+      throw new Error(
+        "The pending Creator Success Fund amount is invalid.",
+      );
     }
+
+    const balance =
+      await connection.getBalance(publicKey, "confirmed");
 
     const latestBlockhash =
       await connection.getLatestBlockhash("confirmed");
 
-    const transaction = new Transaction({
-      feePayer: publicKey,
-      recentBlockhash: latestBlockhash.blockhash,
-    }).add(
-      SystemProgram.transfer({
-        fromPubkey: publicKey,
-        toPubkey: CREATOR_SUCCESS_FUND_WALLET,
-        lamports,
-      }),
-    );
+    const transaction =
+      new Transaction({
+        feePayer: publicKey,
+        recentBlockhash: latestBlockhash.blockhash,
+      }).add(
+        SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: CREATOR_SUCCESS_FUND_WALLET,
+          lamports,
+        }),
+      );
 
-    const signedTransaction = await signTransaction(transaction);
+    const fee = await transaction.getEstimatedFee(connection);
+    const estimatedFee =
+      typeof fee === "number" ? fee : 5_000;
 
-    const fundSignature = await connection.sendRawTransaction(
-      signedTransaction.serialize(),
-      {
-        skipPreflight: false,
-        maxRetries: 3,
-      },
-    );
+    if (balance < lamports + estimatedFee) {
+      throw new Error(
+        `Kodiak's Devnet RPC sees only ${(balance / 1_000_000_000).toFixed(9)} SOL in the connected wallet, but the transfer plus fee needs about ${((lamports + estimatedFee) / 1_000_000_000).toFixed(9)} SOL.`,
+      );
+    }
 
-    const confirmation = await connection.confirmTransaction(
-      {
-        signature: fundSignature,
-        blockhash: latestBlockhash.blockhash,
-        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-      },
-      "confirmed",
-    );
+    setStatus({
+      kind: "working",
+      message:
+        "Approve the Success Fund signature request. Kodiak will submit the signed transaction directly to Devnet.",
+    });
+
+    const signedTransaction =
+      await signTransaction(transaction);
+
+    const fundSignature =
+      await connection.sendRawTransaction(
+        signedTransaction.serialize(),
+        {
+          skipPreflight: false,
+          maxRetries: 5,
+        },
+      );
+
+    const confirmation =
+      await connection.confirmTransaction(
+        {
+          signature: fundSignature,
+          blockhash: latestBlockhash.blockhash,
+          lastValidBlockHeight:
+            latestBlockhash.lastValidBlockHeight,
+        },
+        "confirmed",
+      );
 
     if (confirmation.value.err) {
       throw new Error(
-        "The Creator Success Fund transfer failed to confirm on Devnet.",
+        "The signed Creator Success Fund transaction reached Devnet but failed confirmation.",
       );
     }
 
@@ -287,15 +351,14 @@ export function ClaimPlatformRevenue() {
 
   async function sendAndRecordPendingFund(
     pendingLamports: number,
-  ): Promise<string | undefined> {
-    if (pendingLamports <= 0) return undefined;
-
+  ): Promise<string> {
     const fundSignature =
-      await sendCreatorSuccessFundTransfer(pendingLamports);
-
-    if (!fundSignature) return undefined;
+      await sendCreatorSuccessFundTransfer(
+        pendingLamports,
+      );
 
     await recordVerifiedFundTransfer(fundSignature);
+
     return fundSignature;
   }
 
@@ -306,7 +369,8 @@ export function ClaimPlatformRevenue() {
     if (!connected || !publicKey || !signTransaction) {
       setStatus({
         kind: "error",
-        message: "Connect the authorized Kodiak platform wallet first.",
+        message:
+          "Connect the authorized Kodiak platform wallet first.",
       });
       return;
     }
@@ -314,27 +378,22 @@ export function ClaimPlatformRevenue() {
     if (pendingLamports <= 0) {
       setStatus({
         kind: "idle",
-        message: "There is no pending Creator Success Fund balance to transfer.",
+        message:
+          "There is no pending Creator Success Fund balance to transfer.",
       });
       return;
     }
 
     try {
-      setStatus({
-        kind: "working",
-        message:
-          `Approve the pending Creator Success Fund transfer (${(
-            pendingLamports / 1_000_000_000
-          ).toFixed(9)} SOL) in your wallet...`,
-      });
-
       const fundSignature =
-        await sendAndRecordPendingFund(pendingLamports);
+        await sendAndRecordPendingFund(
+          pendingLamports,
+        );
 
       setStatus({
         kind: "success",
         message:
-          "The pending Creator Success Fund balance was transferred on Devnet and verified by Kodiak.",
+          "The pending Creator Success Fund balance was signed, submitted directly to Devnet, confirmed, and verified by Kodiak.",
         fundSignature,
       });
 
@@ -351,10 +410,15 @@ export function ClaimPlatformRevenue() {
   }
 
   async function claimRevenue() {
-    if (!connected || !publicKey || !signAllTransactions) {
+    if (
+      !connected ||
+      !publicKey ||
+      !signAllTransactions
+    ) {
       setStatus({
         kind: "error",
-        message: "Connect the authorized Kodiak platform wallet first.",
+        message:
+          "Connect the authorized Kodiak platform wallet first.",
       });
       return;
     }
@@ -362,10 +426,13 @@ export function ClaimPlatformRevenue() {
     try {
       setStatus({
         kind: "working",
-        message: "Loading Kodiak's Raydium PlatformConfig...",
+        message:
+          "Loading Kodiak's Raydium PlatformConfig...",
       });
 
-      const response = await fetch("/api/config", { cache: "no-store" });
+      const response = await fetch("/api/config", {
+        cache: "no-store",
+      });
 
       if (!response.ok) {
         throw new Error(
@@ -373,28 +440,35 @@ export function ClaimPlatformRevenue() {
         );
       }
 
-      const config = (await response.json()) as KodiakConfigResponse;
+      const config =
+        (await response.json()) as KodiakConfigResponse;
 
       if (!config.platformId) {
-        throw new Error("Kodiak PlatformConfig ID is not available.");
+        throw new Error(
+          "Kodiak PlatformConfig ID is not available.",
+        );
       }
 
-      const platformId = new PublicKey(config.platformId);
+      const platformId =
+        new PublicKey(config.platformId);
 
-      const raydium = await loadDevnetRaydium({
-        connection,
-        owner: publicKey,
-        signAllTransactions,
-      });
+      const raydium =
+        await loadDevnetRaydium({
+          connection,
+          owner: publicKey,
+          signAllTransactions,
+        });
 
       setStatus({
         kind: "working",
-        message: "Building Kodiak's platform-vault claim...",
+        message:
+          "Building Kodiak's platform-vault claim...",
       });
 
       const { execute } =
         await raydium.launchpad.claimVaultPlatformFee({
-          programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
+          programId:
+            DEVNET_LAUNCHPAD_PROGRAM_ID,
           platformId,
           mintB: NATIVE_MINT,
           claimFeeWallet: publicKey,
@@ -404,10 +478,14 @@ export function ClaimPlatformRevenue() {
 
       setStatus({
         kind: "working",
-        message: "Approve the Kodiak platform-revenue claim in Phantom...",
+        message:
+          "Approve the Kodiak platform-revenue claim in Phantom...",
       });
 
-      const result = await execute({ sendAndConfirm: true });
+      const result = await execute({
+        sendAndConfirm: true,
+      });
+
       const signature = signatureFrom(result);
 
       if (!signature) {
@@ -418,10 +496,12 @@ export function ClaimPlatformRevenue() {
 
       setStatus({
         kind: "working",
-        message: "Claim confirmed. Verifying and recording revenue...",
+        message:
+          "Claim confirmed. Verifying and recording revenue...",
       });
 
-      const accounting = await recordVerifiedClaim(signature);
+      const accounting =
+        await recordVerifiedClaim(signature);
 
       const claimed =
         typeof accounting.claimedSol === "number"
@@ -450,18 +530,12 @@ export function ClaimPlatformRevenue() {
 
       let fundSignature: string | undefined;
 
-      if (pendingLamports > 0) {
-        setStatus({
-          kind: "working",
-          message:
-            `Revenue recorded. Approve the pending Creator Success Fund transfer (${(
-              pendingLamports / 1_000_000_000
-            ).toFixed(9)} SOL) in your wallet...`,
-        });
-
+      if (pendingLamports > 0 && signTransaction) {
         try {
           fundSignature =
-            await sendAndRecordPendingFund(pendingLamports);
+            await sendAndRecordPendingFund(
+              pendingLamports,
+            );
         } catch (fundError) {
           await Promise.all([
             refreshClaimableBalance(),
@@ -472,7 +546,9 @@ export function ClaimPlatformRevenue() {
             kind: "error",
             message:
               `The platform claim succeeded and revenue was recorded, but the Creator Success Fund transfer did not complete. The allocation remains pending and can be retried without another platform claim. ${
-                fundError instanceof Error ? fundError.message : ""
+                fundError instanceof Error
+                  ? fundError.message
+                  : ""
               }`.trim(),
             signature,
           });
@@ -486,7 +562,7 @@ export function ClaimPlatformRevenue() {
         message:
           `Raydium confirmed Kodiak's platform-vault revenue claim on Devnet.${verifiedText}${lifetimeText}${
             fundSignature
-              ? " The pending Creator Success Fund balance was transferred and verified on Devnet."
+              ? " The pending Creator Success Fund balance was signed and submitted directly to Devnet."
               : ""
           }`,
         signature,
@@ -513,21 +589,14 @@ export function ClaimPlatformRevenue() {
 
   return (
     <section className="mt-6 rounded-[2rem] border border-amber-300/20 bg-amber-300/[0.04] p-5 sm:p-6">
-      <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-        <div className="max-w-2xl">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-amber-300">
-            Kodiak platform revenue
-          </p>
+      <div className="max-w-2xl">
+        <p className="text-xs font-black uppercase tracking-[0.18em] text-amber-300">
+          Kodiak platform revenue
+        </p>
 
-          <h2 className="mt-2 text-2xl font-black">
-            Claim Platform Fees
-          </h2>
-
-          <p className="mt-2 text-sm leading-6 text-zinc-500">
-            Claims accumulated Raydium LaunchLab platform fees for Kodiak&apos;s
-            PlatformConfig. This is completely separate from creator rewards.
-          </p>
-        </div>
+        <h2 className="mt-2 text-2xl font-black">
+          Claim Platform Fees
+        </h2>
       </div>
 
       <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-4">
@@ -536,16 +605,13 @@ export function ClaimPlatformRevenue() {
             <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-500">
               Verified revenue accounting
             </p>
-            <p className="mt-1 text-xs leading-5 text-zinc-600">
-              Lifetime totals from verified Devnet platform-fee claims.
-            </p>
           </div>
 
           <button
             type="button"
             onClick={() => void refreshRevenueSummary()}
             disabled={revenueLoading}
-            className="shrink-0 rounded-xl border border-white/10 px-3 py-2 text-xs font-black text-zinc-400 transition hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-xl border border-white/10 px-3 py-2 text-xs font-black text-zinc-400 disabled:opacity-40"
           >
             {revenueLoading ? "Refreshing..." : "Refresh"}
           </button>
@@ -576,39 +642,20 @@ export function ClaimPlatformRevenue() {
                   ? "Unavailable"
                   : `${revenueSummary.creatorSuccessFundSol.toFixed(9)} SOL`}
             </p>
-
-            <p className="mt-3 text-xs leading-5 text-zinc-500">
+            <p className="mt-3 text-xs text-zinc-500">
               Transferred:{" "}
-              <span className="font-black text-emerald-300">
-                {revenueLoading
-                  ? "..."
-                  : `${(
-                      revenueSummary?.creatorSuccessFundTransferredSol ?? 0
-                    ).toFixed(9)} SOL`}
-              </span>
+              {revenueLoading
+                ? "..."
+                : `${(
+                    revenueSummary?.creatorSuccessFundTransferredSol ?? 0
+                  ).toFixed(9)} SOL`}
             </p>
-
-            <p className="text-xs leading-5 text-zinc-500">
+            <p className="text-xs text-zinc-500">
               Pending:{" "}
-              <span className="font-black text-amber-300">
-                {revenueLoading ? "..." : `${pendingSol.toFixed(9)} SOL`}
-              </span>
+              {revenueLoading
+                ? "..."
+                : `${pendingSol.toFixed(9)} SOL`}
             </p>
-
-            <p className="mt-3 break-all text-[11px] leading-5 text-zinc-700">
-              Fund wallet: {CREATOR_SUCCESS_FUND_WALLET.toBase58()}
-            </p>
-
-            {revenueSummary?.lastCreatorSuccessFundTransferSignature ? (
-              <a
-                href={`https://explorer.solana.com/tx/${revenueSummary.lastCreatorSuccessFundTransferSignature}?cluster=devnet`}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-2 inline-block text-[11px] font-black text-emerald-300 underline underline-offset-4"
-              >
-                View latest fund transfer
-              </a>
-            ) : null}
           </div>
 
           <div className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.04] p-4">
@@ -625,32 +672,17 @@ export function ClaimPlatformRevenue() {
           </div>
         </div>
 
-        <div className="mt-3 flex flex-col gap-2 rounded-2xl border border-white/10 bg-black/20 p-4 text-xs text-zinc-500 sm:flex-row sm:items-center sm:justify-between">
-          <p>
-            Verified claims:{" "}
-            <span className="font-black text-zinc-300">
-              {revenueLoading ? "..." : revenueSummary?.claimCount ?? 0}
-            </span>
-          </p>
-
-          {revenueSummary?.lastClaimSignature ? (
-            <a
-              href={`https://explorer.solana.com/tx/${revenueSummary.lastClaimSignature}?cluster=devnet`}
-              target="_blank"
-              rel="noreferrer"
-              className="font-black text-amber-300 underline underline-offset-4"
-            >
-              View latest claim
-            </a>
-          ) : null}
-        </div>
-
         {pendingSol > 0 ? (
           <button
             type="button"
             onClick={() => void retryPendingSuccessFund()}
-            disabled={!connected || !signTransaction || busy || revenueLoading}
-            className="mt-3 w-full rounded-xl border border-emerald-400/30 bg-emerald-400/[0.08] px-4 py-3 text-sm font-black text-emerald-200 transition hover:bg-emerald-400/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={
+              !connected ||
+              !signTransaction ||
+              busy ||
+              revenueLoading
+            }
+            className="mt-3 w-full rounded-xl border border-emerald-400/30 bg-emerald-400/[0.08] px-4 py-3 text-sm font-black text-emerald-200 disabled:opacity-40"
           >
             {busy
               ? "Working..."
@@ -672,15 +704,11 @@ export function ClaimPlatformRevenue() {
               : `${claimableSol.toFixed(9)} SOL`}
         </p>
 
-        <p className="mt-1 text-xs text-zinc-600">
-          Live balance from Kodiak&apos;s on-chain Raydium platform-fee vault.
-        </p>
-
         <button
           type="button"
           onClick={() => void refreshClaimableBalance()}
           disabled={balanceLoading}
-          className="mt-3 rounded-xl border border-white/10 px-3 py-2 text-xs font-black text-zinc-400 transition hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
+          className="mt-3 rounded-xl border border-white/10 px-3 py-2 text-xs font-black text-zinc-400 disabled:opacity-40"
         >
           {balanceLoading ? "Refreshing..." : "Refresh balance"}
         </button>
@@ -690,9 +718,11 @@ export function ClaimPlatformRevenue() {
         type="button"
         disabled={!connected || busy}
         onClick={() => void claimRevenue()}
-        className="mt-5 w-full rounded-xl bg-amber-300 px-5 py-3 text-sm font-black text-black transition disabled:cursor-not-allowed disabled:opacity-40"
+        className="mt-5 w-full rounded-xl bg-amber-300 px-5 py-3 text-sm font-black text-black disabled:opacity-40"
       >
-        {busy ? "Claiming..." : "Claim Kodiak Revenue on Devnet"}
+        {busy
+          ? "Claiming..."
+          : "Claim Kodiak Revenue on Devnet"}
       </button>
 
       <div
@@ -704,35 +734,10 @@ export function ClaimPlatformRevenue() {
               : "border-white/10 bg-black/20 text-zinc-500"
         }`}
       >
-        <p className="font-bold">{status.message}</p>
-
-        {"signature" in status && status.signature ? (
-          <a
-            href={`https://explorer.solana.com/tx/${status.signature}?cluster=devnet`}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-2 inline-block break-all text-xs font-black text-amber-300 underline underline-offset-4"
-          >
-            View Devnet claim
-          </a>
-        ) : null}
-
-        {"fundSignature" in status && status.fundSignature ? (
-          <a
-            href={`https://explorer.solana.com/tx/${status.fundSignature}?cluster=devnet`}
-            target="_blank"
-            rel="noreferrer"
-            className="ml-0 mt-2 block break-all text-xs font-black text-emerald-300 underline underline-offset-4 sm:ml-4 sm:inline-block"
-          >
-            View Success Fund transfer
-          </a>
-        ) : null}
+        <p className="font-bold">
+          {status.message}
+        </p>
       </div>
-
-      <p className="mt-4 text-xs leading-5 text-zinc-600">
-        Only the wallet configured as Kodiak&apos;s platform claim-fee wallet
-        should authorize these transactions.
-      </p>
     </section>
   );
 }

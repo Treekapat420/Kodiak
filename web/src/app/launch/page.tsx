@@ -338,6 +338,31 @@ export default function LaunchPage() {
         signAllTransactions,
       });
 
+      const initialBuySol = Number(form.initialBuySol.trim() || "0");
+
+if (!Number.isFinite(initialBuySol) || initialBuySol < 0) {
+  setLaunchStatus({
+    kind: "error",
+    message: "Initial creator buy must be 0 or a valid SOL amount.",
+  });
+  return;
+}
+
+const initialBuyLamports = Math.round(
+  initialBuySol * 1_000_000_000,
+);
+
+if (
+  !Number.isSafeInteger(initialBuyLamports) ||
+  initialBuyLamports < 0
+) {
+  setLaunchStatus({
+    kind: "error",
+    message: "Initial creator buy amount is invalid.",
+  });
+  return;
+}
+
       const { transactions, execute } =
         await raydium.launchpad.createLaunchpad({
           programId,
@@ -353,8 +378,8 @@ export default function LaunchPage() {
           platformId,
           txVersion: TxVersion.V0,
           slippage: new BN(100),
-          buyAmount: new BN(0),
-          createOnly: true,
+          buyAmount: new BN(initialBuyLamports),
+          createOnly: initialBuyLamports === 0,
           extraSigners: [mintKeypair],
         });
 

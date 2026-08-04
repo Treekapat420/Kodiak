@@ -50,6 +50,10 @@ function formatSol(value: number) {
 export function LaunchChart({ mint }: { mint: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const lineSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const chartFittedRef = useRef(false);
   const [interval, setInterval] = useState<Interval>("1m");
   const [chartMode, setChartMode] = useState<ChartMode>("candles");
   const [candles, setCandles] = useState<Candle[]>([]);
@@ -83,7 +87,7 @@ export function LaunchChart({ mint }: { mint: string }) {
           } else if (nextCandles.length < 4) {
             setMessage(`${nextCandles.length} price point${nextCandles.length === 1 ? "" : "s"} loaded · sparse-trading mode`);
           } else {
-            setMessage(`${nextCandles.length} candles loaded · updates every 15 seconds`);
+            setMessage(`${nextCandles.length} candles loaded · updates every 3 seconds`);
           }
         }
       } catch (error) {
@@ -94,7 +98,7 @@ export function LaunchChart({ mint }: { mint: string }) {
     };
 
     void load();
-    const timer = window.setInterval(() => void load(), 15_000);
+    const timer = window.setInterval(() => void load(), 3_000);
 
     return () => {
       cancelled = true;
@@ -108,6 +112,11 @@ export function LaunchChart({ mint }: { mint: string }) {
 
     chartRef.current?.remove();
 
+    candleSeriesRef.current = null;
+    lineSeriesRef.current = null;
+    volumeSeriesRef.current = null;
+    chartFittedRef.current = false;
+    
     const chart = createChart(container, {
       width: container.clientWidth,
       height: 430,
@@ -149,9 +158,8 @@ export function LaunchChart({ mint }: { mint: string }) {
         priceLineVisible: true,
         lastValueVisible: true,
         priceFormat: { type: "price", precision: 10, minMove: 0.0000000001 },
-      });
+      });lineSeriesRef.current = line;
 
-      line.setData(normalized.map((candle) => ({ time: candle.time, value: candle.close })));
     } else {
       const series = chart.addCandlestickSeries({
         upColor: "#39e58c",
@@ -163,9 +171,8 @@ export function LaunchChart({ mint }: { mint: string }) {
         priceLineVisible: true,
         lastValueVisible: true,
         priceFormat: { type: "price", precision: 10, minMove: 0.0000000001 },
-      });
+      });candleSeriesRef.current = series;
 
-      series.setData(normalized);
     }
 
     const volume = chart.addHistogramSeries({
@@ -173,18 +180,12 @@ export function LaunchChart({ mint }: { mint: string }) {
       priceScaleId: "",
       lastValueVisible: false,
       priceLineVisible: false,
-    });
+    });volumeSeriesRef.current = volume;
 
     volume.priceScale().applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
     volume.setData(
-      normalized.map((candle) => ({
-        time: candle.time,
-        value: candle.volume ?? 0,
-        color: candle.close >= candle.open ? "rgba(57,229,140,0.42)" : "rgba(255,77,103,0.42)",
-      })),
     );
 
-    if (candles.length) chart.timeScale().fitContent();
 
     const observer = new ResizeObserver(() => {
       chart.applyOptions({ width: container.clientWidth });
@@ -198,7 +199,40 @@ export function LaunchChart({ mint }: { mint: string }) {
       chart.remove();
       chartRef.current = null;
     };
-  }, [candles, interval]);
+  }, [chartMode, interval]);
+  useEffect(() => {
+  const normalized = candles.map((candle) => ({
+    ...candle,
+    time: candle.time as UTCTimestamp,
+  }));
+
+  if (chartMode === "line") {
+    lineSeriesRef.current?.setData(
+      normalized.map((candle) => ({
+        time: candle.time,
+        value: candle.close,
+      })),
+    );
+  } else {
+    candleSeriesRef.current?.setData(normalized);
+  }
+
+  volumeSeriesRef.current?.setData(
+    normalized.map((candle) => ({
+      time: candle.time,
+      value: candle.volume ?? 0,
+      color:
+        candle.close >= candle.open
+          ? "rgba(57,229,140,0.42)"
+          : "rgba(255,77,103,0.42)",
+    })),
+  );
+
+  if (candles.length > 0 && !chartFittedRef.current) {
+    chartRef.current?.timeScale().fitContent();
+    chartFittedRef.current = true;
+  }
+}, [candles, chartMode]);
 
   const latest = candles.at(-1)?.close;
 

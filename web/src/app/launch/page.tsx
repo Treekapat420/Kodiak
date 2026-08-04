@@ -488,6 +488,49 @@ if (
         );
       }
 
+      if (initialBuyLamports > 0) {
+  let initialBuyRecorded = false;
+
+  for (
+    let attempt = 0;
+    attempt < 5 && !initialBuyRecorded;
+    attempt += 1
+  ) {
+    if (attempt > 0) {
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, 2500),
+      );
+    }
+
+    const response = await fetch(`/api/token/${mint}/trades`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        wallet: publicKey.toBase58(),
+        signature: launchSignature,
+        side: "buy",
+        solAmount: initialBuySol,
+      }),
+    });
+
+    if (response.ok || response.status === 409) {
+      initialBuyRecorded = true;
+      break;
+    }
+
+    if (attempt === 4) {
+      const payload = await response.json().catch(() => null);
+
+      console.error(
+        "Initial creator buy succeeded on-chain, but Kodiak could not record it:",
+        payload?.error ?? response.statusText,
+      );
+    }
+  }
+}
+      
       const createdAt = new Date().toISOString();
 
       window.localStorage.setItem(

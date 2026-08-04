@@ -140,12 +140,15 @@ export default function CreatorPage() {
 
       const data = (await response.json()) as {
         launch?: LaunchRecord;
+        foundingCreator?: FoundingCreator;
         error?: string;
       };
 
       if (!response.ok || !data.launch) {
         throw new Error(data.error || "Launch registration failed.");
       }
+
+      setFoundingCreator(data.foundingCreator ?? null);
 
       await refresh();
       setStatus({

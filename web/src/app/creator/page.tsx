@@ -21,6 +21,12 @@ type LaunchRecord = {
   createdAt: string;
 };
 
+type FoundingCreator = {
+  isFoundingCreator: boolean;
+  number: number | null;
+  label: string | null;
+};
+
 type FeeConfig = {
   tradingFeeBps: number;
   infrastructureFeeBps: number;
@@ -43,6 +49,7 @@ const percent = (value: number) => `${(value / 100).toFixed(2)}%`;
 export default function CreatorPage() {
   const { connected, publicKey } = useWallet();
   const [launches, setLaunches] = useState<LaunchRecord[]>([]);
+  const [foundingCreator, setFoundingCreator] = useState<FoundingCreator | null>(null);
   const [config, setConfig] = useState<FeeConfig | null>(null);
   const [status, setStatus] = useState<Status>({
     kind: "idle",
@@ -67,6 +74,7 @@ export default function CreatorPage() {
 
       const launchData = (await launchResponse.json()) as {
         launches?: LaunchRecord[];
+        foundingCreator?: FoundingCreator;
         error?: string;
       };
       const configData = (await configResponse.json()) as FeeConfig & {
@@ -77,6 +85,7 @@ export default function CreatorPage() {
       if (!configResponse.ok) throw new Error(configData.error);
 
       setLaunches(launchData.launches ?? []);
+      setFoundingCreator(launchData.foundingCreator ?? null);
       setConfig(configData);
       setStatus({ kind: "success", message: "Creator dashboard refreshed." });
     } catch (error) {
@@ -168,6 +177,16 @@ export default function CreatorPage() {
             <KodiakWalletButton />
           </div>
 
+          {foundingCreator?.isFoundingCreator && (
+  <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-amber-300/[0.08] px-4 py-2 text-sm font-black text-amber-300">
+    <span>🏔️</span>
+    <span>
+      {foundingCreator.label ??
+        `Founding Creator #${foundingCreator.number}`}
+    </span>
+  </div>
+)}
+
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             <button
               type="button"
@@ -250,10 +269,8 @@ export default function CreatorPage() {
             </div>
           ) : (
             <div className="mt-5 grid gap-4">
-              {launches.map((launch, index) => {
-                const founding =
-                  Boolean(config?.foundingProgramEnabled) &&
-                  index < (config?.foundingCreatorLimit ?? 100);
+              {launches.map((launch) => {
+                const founding = Boolean(foundingCreator?.isFoundingCreator);
 
                 return (
                   <article
@@ -270,7 +287,10 @@ export default function CreatorPage() {
                         </p>
                       </div>
                       <span className={founding ? "rounded-full bg-amber-300/15 px-3 py-1 text-xs font-black text-amber-300" : "rounded-full bg-emerald-400/10 px-3 py-1 text-xs font-black text-emerald-300"}>
-                        {founding ? "Founding Creator candidate" : "Regular launch"}
+                        {founding
+                          ? foundingCreator?.label ??
+                            `Founding Creator #${foundingCreator?.number}`
+                          : "Regular creator"}
                       </span>
                     </div>
 

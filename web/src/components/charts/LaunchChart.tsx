@@ -5,6 +5,7 @@ import {
   ColorType,
   createChart,
   type IChartApi,
+  type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
 

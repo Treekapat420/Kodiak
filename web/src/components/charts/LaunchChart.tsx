@@ -183,9 +183,6 @@ export function LaunchChart({ mint }: { mint: string }) {
     });volumeSeriesRef.current = volume;
 
     volume.priceScale().applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
-    volume.setData(
-    );
-
 
     const observer = new ResizeObserver(() => {
       chart.applyOptions({ width: container.clientWidth });

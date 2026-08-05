@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
@@ -49,7 +50,8 @@ const percent = (value: number) => `${(value / 100).toFixed(2)}%`;
 export default function CreatorPage() {
   const { connected, publicKey } = useWallet();
   const [launches, setLaunches] = useState<LaunchRecord[]>([]);
-  const [foundingCreator, setFoundingCreator] = useState<FoundingCreator | null>(null);
+  const [foundingCreator, setFoundingCreator] =
+    useState<FoundingCreator | null>(null);
   const [config, setConfig] = useState<FeeConfig | null>(null);
   const [status, setStatus] = useState<Status>({
     kind: "idle",
@@ -63,7 +65,7 @@ export default function CreatorPage() {
     }
 
     try {
-      setStatus({ kind: "working", message: "Loading creator dashboard…" });
+      setStatus({ kind: "working", message: "Loading creator dashboard..." });
       const address = publicKey.toBase58();
       const [launchResponse, configResponse] = await Promise.all([
         fetch(`/api/creator/launches?creator=${encodeURIComponent(address)}`, {
@@ -122,7 +124,7 @@ export default function CreatorPage() {
 
       setStatus({
         kind: "working",
-        message: "Verifying the launch on Solana Devnet…",
+        message: "Verifying the launch on Solana Devnet...",
       });
 
       const response = await fetch("/api/creator/launches", {
@@ -149,8 +151,8 @@ export default function CreatorPage() {
       }
 
       setFoundingCreator(data.foundingCreator ?? null);
-
       await refresh();
+
       setStatus({
         kind: "success",
         message: "Launch verified and added to your creator dashboard.",
@@ -164,8 +166,29 @@ export default function CreatorPage() {
   };
 
   return (
-    <main className="min-h-screen bg-black px-4 py-8 text-white">
+    <main className="min-h-screen bg-black px-4 py-6 text-white sm:py-8">
       <div className="mx-auto max-w-5xl space-y-6">
+        <nav className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/"
+            className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-black"
+          >
+            Home
+          </Link>
+          <Link
+            href="/dashboard"
+            className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-black"
+          >
+            Command Center
+          </Link>
+          <Link
+            href="/creator"
+            className="rounded-xl bg-emerald-400 px-4 py-3 text-sm font-black text-black"
+          >
+            Creator Setup
+          </Link>
+        </nav>
+
         <header className="rounded-3xl border border-emerald-400/20 bg-white/[0.03] p-6">
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div>
@@ -181,14 +204,18 @@ export default function CreatorPage() {
           </div>
 
           {foundingCreator?.isFoundingCreator && (
-  <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-amber-300/[0.08] px-4 py-2 text-sm font-black text-amber-300">
-    <span>🏔️</span>
-    <span>
-      {foundingCreator.label ??
-        `Founding Creator #${foundingCreator.number}`}
-    </span>
-  </div>
-)}
+            <div className="mt-5 inline-flex max-w-full items-center gap-3 rounded-2xl border border-amber-300/40 bg-amber-300/[0.08] px-4 py-3 text-sm font-black text-amber-300">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-amber-300/40 bg-amber-300/10 text-xs">
+                FC
+              </span>
+              <span className="break-words">
+                {foundingCreator.label ??
+                  `FOUNDING CREATOR #${String(
+                    foundingCreator.number ?? 0,
+                  ).padStart(3, "0")}`}
+              </span>
+            </div>
+          )}
 
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             <button
@@ -276,14 +303,11 @@ export default function CreatorPage() {
                 const founding = Boolean(foundingCreator?.isFoundingCreator);
 
                 return (
-                  <article
-                    key={launch.mint}
-                    className="rounded-2xl border border-white/10 bg-black/30 p-5"
-                  >
+                  <article key={launch.mint} className="rounded-2xl border border-white/10 bg-black/30 p-5">
                     <div className="flex flex-wrap items-start justify-between gap-4">
                       <div>
                         <p className="text-xl font-black">
-                          {launch.name} · ${launch.symbol}
+                          {launch.name} | ${launch.symbol}
                         </p>
                         <p className="mt-2 break-all font-mono text-xs text-zinc-500">
                           {launch.mint}
@@ -298,10 +322,7 @@ export default function CreatorPage() {
                     </div>
 
                     <div className="mt-5 flex flex-wrap gap-3">
-                      <a
-                        href={`/token/${launch.mint}`}
-                        className="rounded-xl border border-white/10 px-4 py-3 text-sm font-bold text-amber-300"
-                      >
+                      <a href={`/token/${launch.mint}`} className="rounded-xl border border-white/10 px-4 py-3 text-sm font-bold text-amber-300">
                         View token + chart
                       </a>
                       <a href={`https://explorer.solana.com/tx/${launch.signature}?cluster=devnet`} target="_blank" rel="noreferrer" className="rounded-xl border border-white/10 px-4 py-3 text-sm font-bold text-zinc-300">

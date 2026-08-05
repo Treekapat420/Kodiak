@@ -66,9 +66,14 @@ function shortWallet(value: string) {
 
 function formatPrice(value: number) {
   if (!Number.isFinite(value) || value === 0) return "0";
-  if (Math.abs(value) >= 1) return value.toFixed(4);
-  if (Math.abs(value) >= 0.001) return value.toFixed(6);
-  return value.toPrecision(6);
+
+  const absolute = Math.abs(value);
+
+  if (absolute >= 1) return value.toFixed(4);
+  if (absolute >= 0.01) return value.toFixed(6);
+  if (absolute >= 0.000001) return value.toFixed(8);
+
+  return value.toFixed(10).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function sameCandle(left: Candle, right: Candle) {
@@ -200,8 +205,8 @@ export function LaunchChart({ mint }: { mint: string }) {
         autoScale: true,
         borderColor: "rgba(255,255,255,0.12)",
         scaleMargins: {
-          top: 0.08,
-          bottom: 0.24,
+          top: 0.16,
+          bottom: 0.32,
         },
       },
       timeScale: {
@@ -213,7 +218,7 @@ export function LaunchChart({ mint }: { mint: string }) {
         barSpacing: 10,
         minBarSpacing: 1,
         lockVisibleTimeRangeOnResize: true,
-        rightBarStaysOnScroll: true,
+        rightBarStaysOnScroll: false,
       },
       handleScroll: {
         mouseWheel: true,
@@ -395,13 +400,28 @@ export function LaunchChart({ mint }: { mint: string }) {
     previousCandlesRef.current = candles.map((item) => ({ ...item }));
 
     if (!fittedRef.current && candles.length > 0) {
-      chart.timeScale().fitContent();
-
-      if (candles.length <= 3) {
+      if (candles.length === 1) {
         chart.timeScale().applyOptions({
-          barSpacing: expanded ? 36 : 28,
-          rightOffset: expanded ? 8 : 5,
+          barSpacing: expanded ? 18 : 14,
+          rightOffset: expanded ? 18 : 14,
         });
+
+        chart.timeScale().setVisibleLogicalRange({
+          from: -18,
+          to: 18,
+        });
+      } else if (candles.length <= 3) {
+        chart.timeScale().applyOptions({
+          barSpacing: expanded ? 22 : 18,
+          rightOffset: expanded ? 10 : 7,
+        });
+
+        chart.timeScale().setVisibleLogicalRange({
+          from: -8,
+          to: 12,
+        });
+      } else {
+        chart.timeScale().fitContent();
       }
 
       fittedRef.current = true;
@@ -447,12 +467,42 @@ export function LaunchChart({ mint }: { mint: string }) {
     const chart = chartRef.current;
     if (!chart || candles.length === 0) return;
 
-    chart.timeScale().applyOptions({
-      barSpacing: candles.length <= 3 ? (expanded ? 36 : 28) : 10,
-      rightOffset: expanded ? 8 : 5,
-    });
+    if (candles.length === 1) {
+      chart.timeScale().applyOptions({
+        barSpacing: expanded ? 18 : 14,
+        rightOffset: expanded ? 18 : 14,
+      });
 
-    chart.timeScale().fitContent();
+      chart.timeScale().setVisibleLogicalRange({
+        from: -18,
+        to: 18,
+      });
+    } else if (candles.length <= 3) {
+      chart.timeScale().applyOptions({
+        barSpacing: expanded ? 22 : 18,
+        rightOffset: expanded ? 10 : 7,
+      });
+
+      chart.timeScale().setVisibleLogicalRange({
+        from: -8,
+        to: 12,
+      });
+    } else {
+      chart.timeScale().applyOptions({
+        barSpacing: 10,
+        rightOffset: expanded ? 8 : 5,
+      });
+
+      chart.timeScale().fitContent();
+    }
+
+    chart.priceScale("right").applyOptions({
+      autoScale: true,
+      scaleMargins: {
+        top: 0.16,
+        bottom: 0.32,
+      },
+    });
   };
 
   return (
@@ -569,6 +619,7 @@ export function LaunchChart({ mint }: { mint: string }) {
       >
         <div
           ref={containerRef}
+          onDoubleClick={reset}
           className={expanded ? "h-full w-full" : "min-h-[460px] w-full"}
           style={{
             touchAction: "none",

@@ -169,24 +169,52 @@ export async function POST(
       existingTrades.at(-1)?.closePriceSol ??
       existingTrades.at(-1)?.priceSol;
 
-    const rawOpen =
-      inferred.openPriceSol ??
-      previousClose ??
-      executionPrice;
+    const officialClose = Number(
+      inferred.closePriceSol,
+    );
 
-    const rawClose =
-      inferred.closePriceSol ??
-      executionPrice;
+    const officialCloseIsUsable =
+      Number.isFinite(officialClose) &&
+      officialClose > 0 &&
+      officialClose >= executionPrice * 0.5 &&
+      officialClose <= executionPrice * 2;
 
-    const openPriceSol =
-      side === "buy"
-        ? Math.min(rawOpen, rawClose)
-        : Math.max(rawOpen, rawClose);
+    const currentPrice = officialCloseIsUsable
+      ? officialClose
+      : executionPrice;
 
-    const closePriceSol =
-      side === "buy"
-        ? Math.max(rawOpen, rawClose)
-        : Math.min(rawOpen, rawClose);
+    let openPriceSol: number;
+    let closePriceSol: number;
+
+    if (
+      Number.isFinite(previousClose) &&
+      Number(previousClose) > 0
+    ) {
+      openPriceSol = Number(previousClose);
+
+      closePriceSol =
+        side === "buy"
+          ? Math.max(
+              openPriceSol,
+              executionPrice,
+              currentPrice,
+            )
+          : Math.min(
+              openPriceSol,
+              executionPrice,
+              currentPrice,
+            );
+    } else {
+      openPriceSol =
+        side === "buy"
+          ? Math.min(executionPrice, currentPrice)
+          : Math.max(executionPrice, currentPrice);
+
+      closePriceSol =
+        side === "buy"
+          ? Math.max(executionPrice, currentPrice)
+          : Math.min(executionPrice, currentPrice);
+    }
 
     const trade: StoredTrade = {
       mint,

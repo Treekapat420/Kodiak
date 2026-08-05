@@ -6,9 +6,6 @@ import {
   createChart,
   type IChartApi,
   type ISeriesApi,
-  type LogicalRange,
-  type MouseEventParams,
-  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 
@@ -44,13 +41,6 @@ type TradesPayload = {
   error?: string;
 };
 
-type HoverCandle = {
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-};
-
 const INTERVALS: Interval[] = ["1s", "1m", "5m", "15m", "1h"];
 
 function shortWallet(wallet: string) {
@@ -69,7 +59,7 @@ function formatPercent(value: number) {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
-function toTimestamp(time: number): UTCTimestamp {
+function toChartTime(time: number) {
   return time as UTCTimestamp;
 }
 
@@ -79,19 +69,15 @@ export function LaunchChart({ mint }: { mint: string }) {
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const lineSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-
-  const initialFitRef = useRef(false);
-  const programmaticMoveRef = useRef(false);
-  const userMovedRef = useRef(false);
+  const firstDataLoadRef = useRef(true);
+  const previousCandlesRef = useRef<Candle[]>([]);
 
   const [interval, setInterval] = useState<Interval>("1m");
   const [chartMode, setChartMode] = useState<ChartMode>("candles");
   const [candles, setCandles] = useState<Candle[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
-  const [autoFollow, setAutoFollow] = useState(true);
   const [message, setMessage] = useState("Loading Kodiak market data...");
-  const [hover, setHover] = useState<HoverCandle | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -128,37 +114,27 @@ export function LaunchChart({ mint }: { mint: string }) {
         setTrades(nextTrades);
         setLoading(false);
 
-        if (nextCandles.length === 0) {
-          setMessage(
-            "No trades yet. The first Kodiak trade will begin the chart.",
-          );
-        } else {
-          setMessage(
-            `${nextCandles.length} candles loaded | updates every 3 seconds`,
-          );
-        }
+        setMessage(
+          nextCandles.length === 0
+            ? "No trades yet. The first Kodiak trade will begin the chart."
+            : `${nextCandles.length} candles loaded | updates every 3 seconds`,
+        );
       } catch (error) {
         if (!cancelled) {
           setLoading(false);
           setMessage(
-            error instanceof Error
-              ? error.message
-              : "Unable to load chart.",
+            error instanceof Error ? error.message : "Unable to load chart.",
           );
         }
       }
     };
 
-    initialFitRef.current = false;
-    userMovedRef.current = false;
-    setAutoFollow(true);
-    setHover(null);
+    setLoading(true);
+    firstDataLoadRef.current = true;
+    previousCandlesRef.current = [];
 
     void load();
-
-    const timer = window.setInterval(() => {
-      void load();
-    }, 3_000);
+    const timer = window.setInterval(() => void load(), 3_000);
 
     return () => {
       cancelled = true;
@@ -181,26 +157,22 @@ export function LaunchChart({ mint }: { mint: string }) {
         textColor: "#a1a1aa",
       },
       grid: {
-        vertLines: { color: "rgba(255,255,255,0.04)" },
-        horzLines: { color: "rgba(255,255,255,0.04)" },
+        vertLines: {
+          color: "rgba(255,255,255,0.04)",
+        },
+        horzLines: {
+          color: "rgba(255,255,255,0.04)",
+        },
       },
       crosshair: {
         vertLine: {
-          color: "rgba(110,231,183,0.32)",
+          color: "rgba(110,231,183,0.35)",
           labelBackgroundColor: "#111827",
         },
         horzLine: {
-          color: "rgba(110,231,183,0.32)",
+          color: "rgba(110,231,183,0.35)",
           labelBackgroundColor: "#111827",
         },
-      },
-      timeScale: {
-        timeVisible: true,
-        secondsVisible: interval === "1s",
-        borderColor: "rgba(255,255,255,0.10)",
-        rightOffset: 6,
-        barSpacing: 10,
-        minBarSpacing: 3,
       },
       rightPriceScale: {
         borderColor: "rgba(255,255,255,0.10)",
@@ -208,27 +180,66 @@ export function LaunchChart({ mint }: { mint: string }) {
           top: 0.08,
           bottom: 0.25,
         },
-        autoScale: true,
+      },
+      timeScale: {
+        borderColor: "rgba(255,255,255,0.10)",
+        timeVisible: true,
+        secondsVisible: interval === "1s",
+        rightOffset: 6,
+        barSpacing: 8,
+        minBarSpacing: 2,
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
       },
       handleScale: {
-        axisPressedMouseMove: false,
+        axisPressedMouseMove: true,
         mouseWheel: true,
         pinch: true,
       },
-      handleScroll: {
-        horzTouchDrag: true,
-        vertTouchDrag: false,
-        mouseWheel: true,
-        pressedMouseMove: true,
-      },
       kineticScroll: {
-        touch: true,
         mouse: true,
+        touch: true,
       },
     });
 
+    if (chartMode === "candles") {
+      candleSeriesRef.current = chart.addCandlestickSeries({
+        upColor: "#39e58c",
+        downColor: "#ff4d67",
+        borderVisible: false,
+        wickUpColor: "#39e58c",
+        wickDownColor: "#ff4d67",
+        priceLineVisible: true,
+        lastValueVisible: true,
+        priceFormat: {
+          type: "price",
+          precision: 10,
+          minMove: 0.0000000001,
+        },
+      });
+    } else {
+      lineSeriesRef.current = chart.addLineSeries({
+        color: "#6ee7b7",
+        lineWidth: 2,
+        crosshairMarkerVisible: true,
+        priceLineVisible: true,
+        lastValueVisible: true,
+        priceFormat: {
+          type: "price",
+          precision: 10,
+          minMove: 0.0000000001,
+        },
+      });
+    }
+
     const volumeSeries = chart.addHistogramSeries({
-      priceFormat: { type: "volume" },
+      priceFormat: {
+        type: "volume",
+      },
       priceScaleId: "",
       lastValueVisible: false,
       priceLineVisible: false,
@@ -241,193 +252,108 @@ export function LaunchChart({ mint }: { mint: string }) {
       },
     });
 
-    const handleRangeChange = (range: LogicalRange | null) => {
-      if (!range || programmaticMoveRef.current) return;
-
-      userMovedRef.current = true;
-      setAutoFollow(false);
-    };
-
-    const handleCrosshairMove = (param: MouseEventParams<Time>) => {
-      if (!param.time) {
-        setHover(null);
-        return;
-      }
-
-      const candleSeries = candleSeriesRef.current;
-      if (!candleSeries) return;
-
-      const data = param.seriesData.get(candleSeries);
-
-      if (
-        data &&
-        "open" in data &&
-        "high" in data &&
-        "low" in data &&
-        "close" in data
-      ) {
-        setHover({
-          open: Number(data.open),
-          high: Number(data.high),
-          low: Number(data.low),
-          close: Number(data.close),
-        });
-      }
-    };
-
-    chart
-      .timeScale()
-      .subscribeVisibleLogicalRangeChange(handleRangeChange);
-
-    chart.subscribeCrosshairMove(handleCrosshairMove);
-
     chartRef.current = chart;
     volumeSeriesRef.current = volumeSeries;
+    firstDataLoadRef.current = true;
+    previousCandlesRef.current = [];
 
-    const observer = new ResizeObserver(() => {
+    const resizeObserver = new ResizeObserver(() => {
       chart.applyOptions({
         width: container.clientWidth,
       });
     });
 
-    observer.observe(container);
+    resizeObserver.observe(container);
 
     return () => {
-      observer.disconnect();
-
-      chart
-        .timeScale()
-        .unsubscribeVisibleLogicalRangeChange(handleRangeChange);
-
-      chart.unsubscribeCrosshairMove(handleCrosshairMove);
+      resizeObserver.disconnect();
       chart.remove();
 
       chartRef.current = null;
       candleSeriesRef.current = null;
       lineSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      previousCandlesRef.current = [];
     };
-  }, []);
-
-  useEffect(() => {
-    chartRef.current?.applyOptions({
-      timeScale: {
-        timeVisible: true,
-        secondsVisible: interval === "1s",
-        rightOffset: 6,
-        barSpacing: 10,
-        minBarSpacing: 3,
-      },
-    });
-  }, [interval]);
+  }, [chartMode, interval]);
 
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart) return;
+    const volumeSeries = volumeSeriesRef.current;
 
-    if (candleSeriesRef.current) {
-      chart.removeSeries(candleSeriesRef.current);
-      candleSeriesRef.current = null;
-    }
+    if (!chart || !volumeSeries) return;
 
-    if (lineSeriesRef.current) {
-      chart.removeSeries(lineSeriesRef.current);
-      lineSeriesRef.current = null;
-    }
-
-    if (chartMode === "line") {
-      lineSeriesRef.current = chart.addLineSeries({
-        color: "#6ee7b7",
-        lineWidth: 3,
-        crosshairMarkerVisible: true,
-        priceLineVisible: true,
-        lastValueVisible: true,
-        priceFormat: {
-          type: "price",
-          precision: 10,
-          minMove: 0.0000000001,
-        },
-      });
-    } else {
-      candleSeriesRef.current = chart.addCandlestickSeries({
-        upColor: "#39e58c",
-        downColor: "#ff4d67",
-        borderUpColor: "#39e58c",
-        borderDownColor: "#ff4d67",
-        wickUpColor: "#39e58c",
-        wickDownColor: "#ff4d67",
-        priceLineVisible: true,
-        lastValueVisible: true,
-        priceFormat: {
-          type: "price",
-          precision: 10,
-          minMove: 0.0000000001,
-        },
-      });
-    }
-  }, [chartMode]);
-
-  useEffect(() => {
     const normalized = candles.map((candle) => ({
       ...candle,
-      time: toTimestamp(candle.time),
+      time: toChartTime(candle.time),
     }));
 
-    if (chartMode === "line") {
-      lineSeriesRef.current?.setData(
-        normalized.map((candle) => ({
-          time: candle.time,
-          value: candle.close,
-        })),
-      );
-    } else {
-      candleSeriesRef.current?.setData(normalized);
-    }
+    const previous = previousCandlesRef.current;
+    const canUpdateOnlyLatest =
+      previous.length > 0 &&
+      normalized.length >= previous.length &&
+      normalized.length <= previous.length + 1 &&
+      previous.slice(0, -1).every((oldCandle, index) => {
+        const next = candles[index];
+        return (
+          next &&
+          oldCandle.time === next.time &&
+          oldCandle.open === next.open &&
+          oldCandle.high === next.high &&
+          oldCandle.low === next.low &&
+          oldCandle.close === next.close &&
+          Number(oldCandle.volume ?? 0) === Number(next.volume ?? 0)
+        );
+      });
 
-    volumeSeriesRef.current?.setData(
-      normalized.map((candle) => ({
-        time: candle.time,
-        value: candle.volume ?? 0,
-        color:
-          candle.close >= candle.open
-            ? "rgba(57,229,140,0.35)"
-            : "rgba(255,77,103,0.35)",
-      })),
-    );
+    if (chartMode === "candles") {
+      const series = candleSeriesRef.current;
+      if (!series) return;
 
-    const chart = chartRef.current;
-    if (!chart || candles.length === 0) return;
-
-    if (!initialFitRef.current) {
-      programmaticMoveRef.current = true;
-
-      if (candles.length <= 20) {
-        chart.timeScale().setVisibleLogicalRange({
-          from: -6,
-          to: Math.max(24, candles.length + 6),
-        });
+      if (canUpdateOnlyLatest && normalized.length > 0) {
+        const latest = normalized[normalized.length - 1];
+        series.update(latest);
       } else {
-        chart.timeScale().fitContent();
+        series.setData(normalized);
       }
+    } else {
+      const series = lineSeriesRef.current;
+      if (!series) return;
 
-      initialFitRef.current = true;
+      const lineData = normalized.map((candle) => ({
+        time: candle.time,
+        value: candle.close,
+      }));
 
-      window.setTimeout(() => {
-        programmaticMoveRef.current = false;
-      }, 0);
-
-      return;
+      if (canUpdateOnlyLatest && lineData.length > 0) {
+        series.update(lineData[lineData.length - 1]);
+      } else {
+        series.setData(lineData);
+      }
     }
 
-    if (autoFollow && !userMovedRef.current) {
-      programmaticMoveRef.current = true;
-      chart.timeScale().scrollToRealTime();
+    const volumeData = normalized.map((candle) => ({
+      time: candle.time,
+      value: Number(candle.volume ?? 0),
+      color:
+        candle.close >= candle.open
+          ? "rgba(57,229,140,0.35)"
+          : "rgba(255,77,103,0.35)",
+    }));
 
-      window.setTimeout(() => {
-        programmaticMoveRef.current = false;
-      }, 0);
+    if (canUpdateOnlyLatest && volumeData.length > 0) {
+      volumeSeries.update(volumeData[volumeData.length - 1]);
+    } else {
+      volumeSeries.setData(volumeData);
     }
-  }, [autoFollow, candles, chartMode]);
+
+    previousCandlesRef.current = candles.map((candle) => ({ ...candle }));
+
+    if (firstDataLoadRef.current && candles.length > 0) {
+      chart.timeScale().fitContent();
+      firstDataLoadRef.current = false;
+    }
+  }, [candles, chartMode]);
 
   const metrics = useMemo(() => {
     const first = candles[0];
@@ -458,35 +384,8 @@ export function LaunchChart({ mint }: { mint: string }) {
     };
   }, [candles]);
 
-  const enableAuto = () => {
-    userMovedRef.current = false;
-    setAutoFollow(true);
-    programmaticMoveRef.current = true;
-
-    chartRef.current?.timeScale().scrollToRealTime();
-
-    window.setTimeout(() => {
-      programmaticMoveRef.current = false;
-    }, 0);
-  };
-
   const resetChart = () => {
-    userMovedRef.current = false;
-    setAutoFollow(true);
-    programmaticMoveRef.current = true;
-
-    if (candles.length <= 20) {
-      chartRef.current?.timeScale().setVisibleLogicalRange({
-        from: -6,
-        to: Math.max(24, candles.length + 6),
-      });
-    } else {
-      chartRef.current?.timeScale().fitContent();
-    }
-
-    window.setTimeout(() => {
-      programmaticMoveRef.current = false;
-    }, 0);
+    chartRef.current?.timeScale().fitContent();
   };
 
   return (
@@ -494,7 +393,7 @@ export function LaunchChart({ mint }: { mint: string }) {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">
-            Live market
+            TradingView Lightweight Charts
           </p>
 
           <div className="mt-2 flex flex-wrap items-center gap-3">
@@ -518,10 +417,6 @@ export function LaunchChart({ mint }: { mint: string }) {
               </span>
             )}
           </div>
-
-          <p className="mt-1 text-xs text-zinc-500">
-            Drag horizontally to pan | pinch to zoom
-          </p>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -553,18 +448,6 @@ export function LaunchChart({ mint }: { mint: string }) {
 
           <button
             type="button"
-            onClick={enableAuto}
-            className={`rounded-xl border px-3 py-2 text-xs font-black ${
-              autoFollow
-                ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-                : "border-white/10 text-zinc-400"
-            }`}
-          >
-            Auto
-          </button>
-
-          <button
-            type="button"
             onClick={resetChart}
             className="rounded-xl border border-white/10 px-3 py-2 text-xs font-black text-zinc-300"
           >
@@ -578,25 +461,10 @@ export function LaunchChart({ mint }: { mint: string }) {
           label="Price"
           value={`${formatSol(metrics.latestPrice)} SOL`}
         />
-        <Stat
-          label="High"
-          value={`${formatSol(metrics.high)} SOL`}
-        />
-        <Stat
-          label="Low"
-          value={`${formatSol(metrics.low)} SOL`}
-        />
+        <Stat label="High" value={`${formatSol(metrics.high)} SOL`} />
+        <Stat label="Low" value={`${formatSol(metrics.low)} SOL`} />
         <Stat label="Trades" value={String(trades.length)} />
       </div>
-
-      {hover && chartMode === "candles" && (
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-zinc-400">
-          <span>O {formatSol(hover.open)}</span>
-          <span>H {formatSol(hover.high)}</span>
-          <span>L {formatSol(hover.low)}</span>
-          <span>C {formatSol(hover.close)}</span>
-        </div>
-      )}
 
       <div className="mt-4 flex max-w-full gap-2 overflow-x-auto pb-1">
         {INTERVALS.map((value) => (
@@ -616,15 +484,7 @@ export function LaunchChart({ mint }: { mint: string }) {
       </div>
 
       <div className="relative mt-4 overflow-hidden rounded-2xl border border-white/10 bg-[#070707]">
-        <div
-          ref={containerRef}
-          className="min-h-[460px] w-full overscroll-contain"
-          style={{
-            touchAction: "none",
-            WebkitUserSelect: "none",
-            userSelect: "none",
-          }}
-        />
+        <div ref={containerRef} className="min-h-[460px] w-full" />
 
         {loading && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40">

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { SolanaProvider } from "@/providers/SolanaProvider";
+import { GlobalNav } from "@/components/GlobalNav";
 import "@solana/wallet-adapter-react-ui/styles.css";
 
 const geistSans = Geist({
@@ -16,7 +17,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Kodiak | Solana Launchpad",
-  description: "Kodiak — a creator-first Solana token launchpad powered by Raydium LaunchLab.",
+  description:
+    "Kodiak - a creator-first Solana token launchpad powered by Raydium LaunchLab.",
 };
 
 export default function RootLayout({
@@ -29,8 +31,10 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
-        <SolanaProvider>{children}
+      <body className="min-h-full bg-black text-white">
+        <SolanaProvider>
+          <GlobalNav />
+          <div className="min-h-screen pt-20">{children}</div>
         </SolanaProvider>
       </body>
     </html>

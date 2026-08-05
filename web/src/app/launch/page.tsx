@@ -187,7 +187,7 @@ export default function LaunchPage() {
     [bannerPreview, form, logoPreview],
   );
 
-  const estimatedCost = "â 0.02 SOL + network fees";
+  const estimatedCost = "~ 0.02 SOL + network fees";
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -270,7 +270,7 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "working",
-        message: "Uploading the token image and metadata to IPFSâ¦",
+        message: "Uploading the token image and metadata to IPFS...",
       });
 
       const metadataForm = new FormData();
@@ -309,7 +309,7 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "working",
-        message: "Building the Raydium LaunchLab transactionâ¦",
+        message: "Building the Raydium LaunchLab transaction...",
       });
 
       const programId = DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM;
@@ -385,7 +385,7 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "working",
-        message: "Simulating every Devnet launch transactionâ¦",
+        message: "Simulating every Devnet launch transaction...",
       });
 
       for (let index = 0; index < transactions.length; index += 1) {
@@ -414,7 +414,7 @@ export default function LaunchPage() {
       setLaunchStatus({
         kind: "working",
         message:
-          "Simulation passed. Approve the Devnet launch transaction in Phantomâ¦",
+          "Simulation passed. Approve the Devnet launch transaction in Phantom...",
       });
 
       const sent = await execute({ sequentially: true });
@@ -458,7 +458,7 @@ export default function LaunchPage() {
       if (uniqueSignatures.length === 0) {
         setLaunchStatus({
           kind: "working",
-          message: "Locating the confirmed launch transaction on Devnetâ¦",
+          message: "Locating the confirmed launch transaction on Devnet...",
         });
 
         for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -557,7 +557,7 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "working",
-        message: "Registering the verified launch in the Creator Dashboardâ¦",
+        message: "Registering the verified launch in the Creator Dashboard...",
       });
 
       const registrationResponse = await fetch(
@@ -572,7 +572,7 @@ export default function LaunchPage() {
             creator: publicKey.toBase58(),
             name: form.name,
             symbol: form.symbol,
-            signature: launchSignature,
+            signatures: uniqueSignatures,
             createdAt,
           }),
         },
@@ -918,7 +918,7 @@ export default function LaunchPage() {
                       className="w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {launchStatus.kind === "working"
-                        ? "Preparing Devnet launchâ¦"
+                        ? "Preparing Devnet launch..."
                         : "Prepare Launch Transaction"}
                     </button>
 
@@ -1030,7 +1030,7 @@ export default function LaunchPage() {
                           : "bg-white/[0.05] text-zinc-600"
                       }`}
                     >
-                      {item.complete ? "â" : "Â·"}
+                      {item.complete ? "OK" : "Â·"}
                     </span>
                     <span className={item.complete ? "text-zinc-300" : "text-zinc-600"}>
                       {item.label}

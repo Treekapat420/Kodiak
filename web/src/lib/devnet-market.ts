@@ -1,8 +1,10 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import {
+  Curve,
   DEVNET_PROGRAM_ID,
   getPdaLaunchpadPoolId,
+  LaunchpadConfig,
   LaunchpadPool,
 } from "@raydium-io/raydium-sdk-v2";
 
@@ -254,15 +256,8 @@ function findLargestNegativeDelta(
   return best;
 }
 
-async function readLaunchpadCurvePrices(
-  mint: string,
-  tokenAmount: number,
-) {
+async function readLaunchpadCurvePrices(mint: string) {
   try {
-    if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) {
-      return {};
-    }
-
     const mintA = new PublicKey(mint);
     const poolId = getPdaLaunchpadPoolId(
       DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM,
@@ -270,75 +265,48 @@ async function readLaunchpadCurvePrices(
       NATIVE_MINT,
     ).publicKey;
 
-    const account = await connection.getAccountInfo(
+    const poolAccount = await connection.getAccountInfo(
       poolId,
       "confirmed",
     );
 
-    if (!account) {
+    if (!poolAccount) {
       return {};
     }
 
-    const pool = LaunchpadPool.decode(account.data);
+    const poolInfo = LaunchpadPool.decode(poolAccount.data);
 
-    const decimalsA = Number(pool.mintDecimalsA);
-    const decimalsB = Number(pool.mintDecimalsB);
+    const configAccount = await connection.getAccountInfo(
+      poolInfo.configId,
+      "confirmed",
+    );
 
-    const virtualARaw = Number(pool.virtualA.toString());
-    const virtualBRaw = Number(pool.virtualB.toString());
-
-    if (
-      !Number.isFinite(virtualARaw) ||
-      !Number.isFinite(virtualBRaw) ||
-      virtualARaw <= 0 ||
-      virtualBRaw <= 0
-    ) {
+    if (!configAccount) {
       return {};
     }
 
-    const postA = virtualARaw / 10 ** decimalsA;
-    const postB = virtualBRaw / 10 ** decimalsB;
-    const preA = postA + tokenAmount;
+    const configInfo = LaunchpadConfig.decode(
+      configAccount.data,
+    );
+
+    const closePriceSol = Curve.getPrice({
+      poolInfo,
+      curveType: configInfo.curveType,
+      decimalA: poolInfo.mintDecimalsA,
+      decimalB: poolInfo.mintDecimalsB,
+    }).toNumber();
 
     if (
-      !Number.isFinite(postA) ||
-      !Number.isFinite(postB) ||
-      !Number.isFinite(preA) ||
-      postA <= 0 ||
-      postB <= 0 ||
-      preA <= postA
-    ) {
-      return {};
-    }
-
-    /*
-     * Kodiak currently creates LaunchLab config index 0 / curve index 0,
-     * which is the constant-product bonding curve. Immediately after the
-     * creator buy, k = virtualA * virtualB. Reverse the token amount that
-     * left the curve to recover the pre-buy virtual SOL reserve.
-     */
-    const invariant = postA * postB;
-    const preB = invariant / preA;
-
-    const openPriceSol = preB / preA;
-    const closePriceSol = postB / postA;
-
-    if (
-      !Number.isFinite(openPriceSol) ||
       !Number.isFinite(closePriceSol) ||
-      openPriceSol <= 0 ||
       closePriceSol <= 0
     ) {
       return {};
     }
 
-    return {
-      openPriceSol,
-      closePriceSol,
-    };
+    return { closePriceSol };
   } catch (error) {
     console.error(
-      "Unable to read LaunchLab curve prices:",
+      "Unable to read official LaunchLab curve price:",
       error,
     );
     return {};
@@ -411,7 +379,7 @@ export async function inferTokenAmount(
   }
 
   const curvePrices =
-    await readLaunchpadCurvePrices(mint, tokenAmount);
+    await readLaunchpadCurvePrices(mint);
 
   return {
     tokenAmount,

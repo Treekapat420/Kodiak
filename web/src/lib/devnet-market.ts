@@ -256,7 +256,12 @@ function findLargestNegativeDelta(
   return best;
 }
 
-async function readLaunchpadCurvePrices(mint: string) {
+async function readLaunchpadCurvePrices(
+  mint: string,
+): Promise<{
+  openPriceSol?: number;
+  closePriceSol?: number;
+}> {
   try {
     const mintA = new PublicKey(mint);
     const poolId = getPdaLaunchpadPoolId(

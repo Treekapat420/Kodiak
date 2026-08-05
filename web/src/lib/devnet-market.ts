@@ -1,4 +1,5 @@
 import { Connection, PublicKey } from "@solana/web3.js";
+import { NATIVE_MINT } from "@solana/spl-token";
 
 export type StoredTrade = {
   mint: string;
@@ -8,16 +9,23 @@ export type StoredTrade = {
   solAmount: number;
   tokenAmount: number;
   priceSol: number;
+  openPriceSol?: number;
+  closePriceSol?: number;
   timestamp: number;
 };
 
-export type Candle = {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
+type InferredTrade = {
+  tokenAmount: number;
+  timestamp: number;
+  openPriceSol?: number;
+  closePriceSol?: number;
+};
+
+type TokenBalance = {
+  accountIndex: number;
+  mint: string;
+  owner?: string;
+  amount: number;
 };
 
 const connection = new Connection(
@@ -74,17 +82,185 @@ async function redis<T = unknown>(command: unknown[]): Promise<T> {
   return payload.result as T;
 }
 
-const tradeKey = (mint: string) => `kodiak:devnet:trades:${mint}`;
+const tradeKey = (mint: string) =>
+  `kodiak:devnet:trades:${mint}`;
+
+const signatureKey = (mint: string) =>
+  `kodiak:devnet:trade-signatures:${mint}`;
+
+function balanceAmount(value: {
+  uiTokenAmount?: {
+    uiAmountString?: string | null;
+    amount?: string;
+    decimals?: number;
+  };
+}) {
+  const uiAmountString = value.uiTokenAmount?.uiAmountString;
+
+  if (uiAmountString != null) {
+    const parsed = Number(uiAmountString);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  const raw = Number(value.uiTokenAmount?.amount ?? "0");
+  const decimals = Number(value.uiTokenAmount?.decimals ?? 0);
+
+  if (!Number.isFinite(raw) || !Number.isFinite(decimals)) {
+    return 0;
+  }
+
+  return raw / 10 ** decimals;
+}
+
+function collectBalances(
+  rows:
+    | Array<{
+        accountIndex: number;
+        mint: string;
+        owner?: string;
+        uiTokenAmount: {
+          uiAmountString?: string | null;
+          amount: string;
+          decimals: number;
+        };
+      }>
+    | null
+    | undefined,
+): TokenBalance[] {
+  return (rows ?? []).map((row) => ({
+    accountIndex: row.accountIndex,
+    mint: row.mint,
+    owner: row.owner,
+    amount: balanceAmount(row),
+  }));
+}
+
+function deltaForAccount(
+  pre: TokenBalance[],
+  post: TokenBalance[],
+  accountIndex: number,
+  mint: string,
+) {
+  const before =
+    pre.find(
+      (row) =>
+        row.accountIndex === accountIndex &&
+        row.mint === mint,
+    )?.amount ?? 0;
+
+  const after =
+    post.find(
+      (row) =>
+        row.accountIndex === accountIndex &&
+        row.mint === mint,
+    )?.amount ?? 0;
+
+  return {
+    before,
+    after,
+    delta: after - before,
+  };
+}
+
+function findLargestPositiveDelta(
+  pre: TokenBalance[],
+  post: TokenBalance[],
+  mint: string,
+  owner?: string,
+) {
+  const indexes = new Set<number>();
+
+  for (const row of [...pre, ...post]) {
+    if (row.mint !== mint) continue;
+    if (owner && row.owner !== owner) continue;
+    indexes.add(row.accountIndex);
+  }
+
+  let best:
+    | {
+        accountIndex: number;
+        before: number;
+        after: number;
+        delta: number;
+      }
+    | undefined;
+
+  for (const accountIndex of indexes) {
+    const delta = deltaForAccount(
+      pre,
+      post,
+      accountIndex,
+      mint,
+    );
+
+    if (delta.delta <= 0) continue;
+
+    if (!best || delta.delta > best.delta) {
+      best = {
+        accountIndex,
+        ...delta,
+      };
+    }
+  }
+
+  return best;
+}
+
+function findLargestNegativeDelta(
+  pre: TokenBalance[],
+  post: TokenBalance[],
+  mint: string,
+) {
+  const indexes = new Set<number>();
+
+  for (const row of [...pre, ...post]) {
+    if (row.mint === mint) {
+      indexes.add(row.accountIndex);
+    }
+  }
+
+  let best:
+    | {
+        accountIndex: number;
+        before: number;
+        after: number;
+        delta: number;
+      }
+    | undefined;
+
+  for (const accountIndex of indexes) {
+    const delta = deltaForAccount(
+      pre,
+      post,
+      accountIndex,
+      mint,
+    );
+
+    if (delta.delta >= 0) continue;
+
+    if (!best || delta.delta < best.delta) {
+      best = {
+        accountIndex,
+        ...delta,
+      };
+    }
+  }
+
+  return best;
+}
 
 export async function inferTokenAmount(
   signature: string,
   mint: string,
   wallet: string,
-) {
-  const parsed = await connection.getParsedTransaction(signature, {
-    commitment: "confirmed",
-    maxSupportedTransactionVersion: 0,
-  });
+): Promise<InferredTrade> {
+  const parsed = await connection.getParsedTransaction(
+    signature,
+    {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    },
+  );
 
   if (!parsed) {
     return {
@@ -94,35 +270,90 @@ export async function inferTokenAmount(
   }
 
   const owner = new PublicKey(wallet).toBase58();
+  const pre = collectBalances(parsed.meta?.preTokenBalances);
+  const post = collectBalances(parsed.meta?.postTokenBalances);
 
-  const preAmount = (parsed.meta?.preTokenBalances ?? [])
-    .filter((balance) => balance.mint === mint && balance.owner === owner)
-    .reduce(
-      (sum, balance) =>
-        sum + Number(balance.uiTokenAmount.uiAmountString ?? "0"),
-      0,
-    );
+  const ownerIncrease =
+    findLargestPositiveDelta(pre, post, mint, owner);
 
-  const postAmount = (parsed.meta?.postTokenBalances ?? [])
-    .filter((balance) => balance.mint === mint && balance.owner === owner)
-    .reduce(
-      (sum, balance) =>
-        sum + Number(balance.uiTokenAmount.uiAmountString ?? "0"),
-      0,
-    );
+  const anyIncrease =
+    ownerIncrease ??
+    findLargestPositiveDelta(pre, post, mint);
+
+  const tokenAmount = Math.abs(anyIncrease?.delta ?? 0);
+
+  const tokenReserve =
+    findLargestNegativeDelta(pre, post, mint);
+
+  const quoteMint = NATIVE_MINT.toBase58();
+  const quoteReserve =
+    findLargestPositiveDelta(pre, post, quoteMint);
+
+  let openPriceSol: number | undefined;
+  let closePriceSol: number | undefined;
+
+  if (
+    tokenReserve &&
+    quoteReserve &&
+    tokenReserve.before > 0 &&
+    tokenReserve.after > 0 &&
+    quoteReserve.before >= 0 &&
+    quoteReserve.after > 0
+  ) {
+    const before =
+      quoteReserve.before / tokenReserve.before;
+    const after =
+      quoteReserve.after / tokenReserve.after;
+
+    if (Number.isFinite(before) && before > 0) {
+      openPriceSol = before;
+    }
+
+    if (Number.isFinite(after) && after > 0) {
+      closePriceSol = after;
+    }
+  }
 
   return {
-    tokenAmount: Math.abs(postAmount - preAmount),
+    tokenAmount,
     timestamp:
-      parsed.blockTime ?? Math.floor(Date.now() / 1000),
+      parsed.blockTime ??
+      Math.floor(Date.now() / 1000),
+    openPriceSol,
+    closePriceSol,
   };
 }
 
 export async function saveTrade(trade: StoredTrade) {
+  const added = await redis<number>([
+    "SADD",
+    signatureKey(trade.mint),
+    trade.signature,
+  ]);
+
+  if (added === 0) {
+    const existing = await getTrades(trade.mint);
+    return (
+      existing.find(
+        (row) => row.signature === trade.signature,
+      ) ?? trade
+    );
+  }
+
   const key = tradeKey(trade.mint);
 
-  await redis(["RPUSH", key, JSON.stringify(trade)]);
-  await redis(["LTRIM", key, -2000, -1]);
+  await redis([
+    "RPUSH",
+    key,
+    JSON.stringify(trade),
+  ]);
+
+  await redis([
+    "LTRIM",
+    key,
+    -5000,
+    -1,
+  ]);
 
   return trade;
 }
@@ -149,109 +380,97 @@ export async function getTrades(
         return null;
       }
     })
-    .filter((row): row is StoredTrade => Boolean(row))
+    .filter(
+      (row): row is StoredTrade => Boolean(row),
+    )
     .sort((a, b) => a.timestamp - b.timestamp);
 }
 
 export function buildCandles(
   trades: StoredTrade[],
   intervalSeconds: number,
-  maxCandles = 500,
-): Candle[] {
-  const safeInterval = Math.max(
-    1,
-    Math.floor(intervalSeconds || 60),
-  );
+) {
+  const buckets = new Map<
+    number,
+    {
+      time: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+    }
+  >();
 
-  const validTrades = trades
-    .filter(
-      (trade) =>
-        Number.isFinite(trade.priceSol) &&
-        trade.priceSol > 0 &&
-        Number.isFinite(trade.timestamp) &&
-        trade.timestamp > 0,
-    )
-    .sort((a, b) => a.timestamp - b.timestamp);
+  let previousClose = 0;
 
-  if (validTrades.length === 0) {
-    return [];
-  }
+  for (const trade of trades) {
+    const executionPrice = Number(trade.priceSol);
+    const eventOpen = Number(
+      trade.openPriceSol ?? previousClose ?? executionPrice,
+    );
+    const eventClose = Number(
+      trade.closePriceSol ?? executionPrice,
+    );
 
-  const buckets = new Map<number, Candle>();
-
-  for (const trade of validTrades) {
-    const bucketTime =
-      Math.floor(trade.timestamp / safeInterval) * safeInterval;
-
-    const existing = buckets.get(bucketTime);
-    const volume = Math.abs(Number(trade.solAmount || 0));
-
-    if (!existing) {
-      buckets.set(bucketTime, {
-        time: bucketTime,
-        open: trade.priceSol,
-        high: trade.priceSol,
-        low: trade.priceSol,
-        close: trade.priceSol,
-        volume,
-      });
+    if (
+      !Number.isFinite(eventClose) ||
+      eventClose <= 0
+    ) {
       continue;
     }
 
-    existing.high = Math.max(existing.high, trade.priceSol);
-    existing.low = Math.min(existing.low, trade.priceSol);
-    existing.close = trade.priceSol;
-    existing.volume += volume;
+    const safeOpen =
+      Number.isFinite(eventOpen) && eventOpen > 0
+        ? eventOpen
+        : eventClose;
+
+    const time =
+      Math.floor(trade.timestamp / intervalSeconds) *
+      intervalSeconds;
+
+    const eventHigh = Math.max(
+      safeOpen,
+      eventClose,
+      executionPrice,
+    );
+
+    const eventLow = Math.min(
+      safeOpen,
+      eventClose,
+      executionPrice,
+    );
+
+    const current = buckets.get(time);
+
+    if (!current) {
+      buckets.set(time, {
+        time,
+        open: safeOpen,
+        high: eventHigh,
+        low: eventLow,
+        close: eventClose,
+        volume: Number(trade.solAmount || 0),
+      });
+    } else {
+      current.high = Math.max(
+        current.high,
+        eventHigh,
+      );
+      current.low = Math.min(
+        current.low,
+        eventLow,
+      );
+      current.close = eventClose;
+      current.volume += Number(
+        trade.solAmount || 0,
+      );
+    }
+
+    previousClose = eventClose;
   }
 
-  const raw = [...buckets.values()].sort(
+  return [...buckets.values()].sort(
     (a, b) => a.time - b.time,
   );
-
-  if (raw.length === 0) {
-    return [];
-  }
-
-  const latestTime = raw[raw.length - 1].time;
-  const earliestAllowed = Math.max(
-    raw[0].time,
-    latestTime - safeInterval * Math.max(1, maxCandles - 1),
-  );
-
-  const rawByTime = new Map(
-    raw
-      .filter((candle) => candle.time >= earliestAllowed)
-      .map((candle) => [candle.time, candle]),
-  );
-
-  const firstIncluded =
-    raw.find((candle) => candle.time >= earliestAllowed) ?? raw[0];
-
-  const filled: Candle[] = [];
-  let previousClose = firstIncluded.open;
-
-  for (
-    let time = earliestAllowed;
-    time <= latestTime;
-    time += safeInterval
-  ) {
-    const candle = rawByTime.get(time);
-
-    if (candle) {
-      filled.push(candle);
-      previousClose = candle.close;
-      continue;
-    }
-
-    filled.push({
-      time,
-      open: previousClose,
-      high: previousClose,
-      low: previousClose,
-      close: previousClose,
-      volume: 0,
-    });
-  }
-
-  return filled.slice(-maxCandles);
 }

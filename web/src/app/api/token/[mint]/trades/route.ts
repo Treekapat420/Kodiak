@@ -169,6 +169,25 @@ export async function POST(
       existingTrades.at(-1)?.closePriceSol ??
       existingTrades.at(-1)?.priceSol;
 
+    const rawOpen =
+      inferred.openPriceSol ??
+      previousClose ??
+      executionPrice;
+
+    const rawClose =
+      inferred.closePriceSol ??
+      executionPrice;
+
+    const openPriceSol =
+      side === "buy"
+        ? Math.min(rawOpen, rawClose)
+        : Math.max(rawOpen, rawClose);
+
+    const closePriceSol =
+      side === "buy"
+        ? Math.max(rawOpen, rawClose)
+        : Math.min(rawOpen, rawClose);
+
     const trade: StoredTrade = {
       mint,
       wallet,
@@ -177,13 +196,8 @@ export async function POST(
       solAmount,
       tokenAmount: inferred.tokenAmount,
       priceSol: executionPrice,
-      openPriceSol:
-        inferred.openPriceSol ??
-        previousClose ??
-        executionPrice,
-      closePriceSol:
-        inferred.closePriceSol ??
-        executionPrice,
+      openPriceSol,
+      closePriceSol,
       timestamp: inferred.timestamp,
     };
 

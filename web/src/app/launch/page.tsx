@@ -187,7 +187,7 @@ export default function LaunchPage() {
     [bannerPreview, form, logoPreview],
   );
 
-  const estimatedCost = "≈ 0.02 SOL + network fees";
+  const estimatedCost = "â 0.02 SOL + network fees";
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -270,7 +270,7 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "working",
-        message: "Uploading the token image and metadata to IPFS…",
+        message: "Uploading the token image and metadata to IPFSâ¦",
       });
 
       const metadataForm = new FormData();
@@ -309,7 +309,7 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "working",
-        message: "Building the Raydium LaunchLab transaction…",
+        message: "Building the Raydium LaunchLab transactionâ¦",
       });
 
       const programId = DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM;
@@ -340,28 +340,28 @@ export default function LaunchPage() {
 
       const initialBuySol = Number(form.initialBuySol.trim() || "0");
 
-if (!Number.isFinite(initialBuySol) || initialBuySol < 0) {
-  setLaunchStatus({
-    kind: "error",
-    message: "Initial creator buy must be 0 or a valid SOL amount.",
-  });
-  return;
-}
+      if (!Number.isFinite(initialBuySol) || initialBuySol < 0) {
+        setLaunchStatus({
+          kind: "error",
+          message: "Initial creator buy must be 0 or a valid SOL amount.",
+        });
+        return;
+      }
 
-const initialBuyLamports = Math.round(
-  initialBuySol * 1_000_000_000,
-);
+      const initialBuyLamports = Math.round(
+        initialBuySol * 1_000_000_000,
+      );
 
-if (
-  !Number.isSafeInteger(initialBuyLamports) ||
-  initialBuyLamports < 0
-) {
-  setLaunchStatus({
-    kind: "error",
-    message: "Initial creator buy amount is invalid.",
-  });
-  return;
-}
+      if (
+        !Number.isSafeInteger(initialBuyLamports) ||
+        initialBuyLamports < 0
+      ) {
+        setLaunchStatus({
+          kind: "error",
+          message: "Initial creator buy amount is invalid.",
+        });
+        return;
+      }
 
       const { transactions, execute } =
         await raydium.launchpad.createLaunchpad({
@@ -385,7 +385,7 @@ if (
 
       setLaunchStatus({
         kind: "working",
-        message: "Simulating every Devnet launch transaction…",
+        message: "Simulating every Devnet launch transactionâ¦",
       });
 
       for (let index = 0; index < transactions.length; index += 1) {
@@ -414,7 +414,7 @@ if (
       setLaunchStatus({
         kind: "working",
         message:
-          "Simulation passed. Approve the Devnet launch transaction in Phantom…",
+          "Simulation passed. Approve the Devnet launch transaction in Phantomâ¦",
       });
 
       const sent = await execute({ sequentially: true });
@@ -425,10 +425,12 @@ if (
           signatures.push(value);
           return;
         }
+
         if (Array.isArray(value)) {
           value.forEach(collectSignatures);
           return;
         }
+
         if (typeof value === "object" && value !== null) {
           Object.entries(value).forEach(([key, item]) => {
             if (
@@ -456,7 +458,7 @@ if (
       if (uniqueSignatures.length === 0) {
         setLaunchStatus({
           kind: "working",
-          message: "Locating the confirmed launch transaction on Devnet…",
+          message: "Locating the confirmed launch transaction on Devnetâ¦",
         });
 
         for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -493,7 +495,7 @@ if (
 
         for (
           let attempt = 0;
-          attempt < 5 && !initialBuyRecorded;
+          attempt < 8 && !initialBuyRecorded;
           attempt += 1
         ) {
           if (attempt > 0) {
@@ -509,28 +511,36 @@ if (
             },
             body: JSON.stringify({
               wallet: publicKey.toBase58(),
-              signature: launchSignature,
+              signatures: uniqueSignatures,
               side: "buy",
               solAmount: initialBuySol,
             }),
           });
 
-          if (response.ok || response.status === 409) {
+          if (response.ok) {
             initialBuyRecorded = true;
             break;
           }
 
-          if (attempt === 4) {
-            const payload = await response.json().catch(() => null);
+          const payload = (await response.json().catch(() => null)) as
+            | { error?: string; retryable?: boolean }
+            | null;
 
+          if (response.status !== 409 || attempt === 7) {
             console.error(
               "Initial creator buy succeeded on-chain, but Kodiak could not record it:",
               payload?.error ?? response.statusText,
             );
           }
         }
+
+        if (!initialBuyRecorded) {
+          console.warn(
+            "The token launched successfully, but its opening creator-buy candle has not been indexed yet.",
+          );
+        }
       }
-      
+
       const createdAt = new Date().toISOString();
 
       window.localStorage.setItem(
@@ -547,7 +557,7 @@ if (
 
       setLaunchStatus({
         kind: "working",
-        message: "Registering the verified launch in the Creator Dashboard…",
+        message: "Registering the verified launch in the Creator Dashboardâ¦",
       });
 
       const registrationResponse = await fetch(
@@ -754,48 +764,48 @@ if (
                 </label>
 
                 <div className="rounded-3xl border border-emerald-400/20 bg-emerald-400/[0.04] p-5">
-  <div className="flex items-start justify-between gap-4">
-    <div>
-      <p className="text-sm font-black text-white">
-        Initial creator buy
-      </p>
-      <p className="mt-1 text-xs leading-5 text-zinc-500">
-        Optional. Be the first buyer of your token when it launches.
-        Leave this at 0 to launch without buying.
-      </p>
-    </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-black text-white">
+                        Initial creator buy
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-zinc-500">
+                        Optional. Be the first buyer of your token when it launches.
+                        Leave this at 0 to launch without buying.
+                      </p>
+                    </div>
 
-    <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-black text-emerald-300">
-      OPTIONAL
-    </span>
-  </div>
+                    <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-black text-emerald-300">
+                      OPTIONAL
+                    </span>
+                  </div>
 
-  <div className="mt-4 flex items-center rounded-2xl border border-white/10 bg-black/40 px-4">
-    <input
-      inputMode="decimal"
-      value={form.initialBuySol}
-      onChange={(event) => update("initialBuySol", event.target.value)}
-      placeholder="0"
-      className="w-full bg-transparent py-4 text-xl font-black text-white outline-none placeholder:text-zinc-700"
-    />
-    <span className="ml-3 text-sm font-black text-emerald-300">
-      SOL
-    </span>
-  </div>
+                  <div className="mt-4 flex items-center rounded-2xl border border-white/10 bg-black/40 px-4">
+                    <input
+                      inputMode="decimal"
+                      value={form.initialBuySol}
+                      onChange={(event) => update("initialBuySol", event.target.value)}
+                      placeholder="0"
+                      className="w-full bg-transparent py-4 text-xl font-black text-white outline-none placeholder:text-zinc-700"
+                    />
+                    <span className="ml-3 text-sm font-black text-emerald-300">
+                      SOL
+                    </span>
+                  </div>
 
-  <div className="mt-3 grid grid-cols-4 gap-2">
-    {["0", "0.1", "0.5", "1"].map((amount) => (
-      <button
-        key={amount}
-        type="button"
-        onClick={() => update("initialBuySol", amount)}
-        className="rounded-xl border border-white/10 bg-black/30 px-2 py-3 text-sm font-bold text-zinc-300 transition hover:border-emerald-400/40 hover:text-emerald-300"
-      >
-        {amount === "0" ? "None" : `${amount} SOL`}
-      </button>
-    ))}
-  </div>
-</div>
+                  <div className="mt-3 grid grid-cols-4 gap-2">
+                    {["0", "0.1", "0.5", "1"].map((amount) => (
+                      <button
+                        key={amount}
+                        type="button"
+                        onClick={() => update("initialBuySol", amount)}
+                        className="rounded-xl border border-white/10 bg-black/30 px-2 py-3 text-sm font-bold text-zinc-300 transition hover:border-emerald-400/40 hover:text-emerald-300"
+                      >
+                        {amount === "0" ? "None" : `${amount} SOL`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -908,7 +918,7 @@ if (
                       className="w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {launchStatus.kind === "working"
-                        ? "Preparing Devnet launch…"
+                        ? "Preparing Devnet launchâ¦"
                         : "Prepare Launch Transaction"}
                     </button>
 
@@ -961,14 +971,14 @@ if (
           <aside className="space-y-5 xl:sticky xl:top-6 xl:self-start">
             <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-zinc-950">
               {bannerPreview ? (
-            <div className="relative h-24 overflow-hidden sm:h-36">
-              <img
-                src={bannerPreview}
-                alt="Token banner preview"
-                className="h-full w-full object-cover"
-              />
-            </div>
-          ) : null}
+                <div className="relative h-24 overflow-hidden sm:h-36">
+                  <img
+                    src={bannerPreview}
+                    alt="Token banner preview"
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+              ) : null}
 
               <div className="p-4 sm:p-6">
                 <div className={`flex items-end justify-between ${bannerPreview ? "-mt-10 sm:-mt-14" : "mt-0"}`}>
@@ -1020,7 +1030,7 @@ if (
                           : "bg-white/[0.05] text-zinc-600"
                       }`}
                     >
-                      {item.complete ? "✓" : "·"}
+                      {item.complete ? "â" : "Â·"}
                     </span>
                     <span className={item.complete ? "text-zinc-300" : "text-zinc-600"}>
                       {item.label}

@@ -51,41 +51,21 @@ type HoverCandle = {
   close: number;
 };
 
-const INTERVALS: Interval[] = [
-  "1s",
-  "1m",
-  "5m",
-  "15m",
-  "1h",
-];
+const INTERVALS: Interval[] = ["1s", "1m", "5m", "15m", "1h"];
 
 function shortWallet(wallet: string) {
-  return wallet
-    ? `${wallet.slice(0, 4)}...${wallet.slice(-4)}`
-    : "-";
+  return wallet ? `${wallet.slice(0, 4)}...${wallet.slice(-4)}` : "-";
 }
 
 function formatSol(value: number) {
-  if (!Number.isFinite(value) || value === 0) {
-    return "0";
-  }
-
-  if (Math.abs(value) >= 1) {
-    return value.toFixed(4);
-  }
-
-  if (Math.abs(value) >= 0.001) {
-    return value.toFixed(6);
-  }
-
+  if (!Number.isFinite(value) || value === 0) return "0";
+  if (Math.abs(value) >= 1) return value.toFixed(4);
+  if (Math.abs(value) >= 0.001) return value.toFixed(6);
   return value.toPrecision(6);
 }
 
 function formatPercent(value: number) {
-  if (!Number.isFinite(value)) {
-    return "0.00%";
-  }
-
+  if (!Number.isFinite(value)) return "0.00%";
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
@@ -96,27 +76,21 @@ function toTimestamp(time: number): UTCTimestamp {
 export function LaunchChart({ mint }: { mint: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const candleSeriesRef =
-    useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const lineSeriesRef =
-    useRef<ISeriesApi<"Line"> | null>(null);
-  const volumeSeriesRef =
-    useRef<ISeriesApi<"Histogram"> | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const lineSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
 
   const initialFitRef = useRef(false);
   const programmaticMoveRef = useRef(false);
   const userMovedRef = useRef(false);
 
   const [interval, setInterval] = useState<Interval>("1m");
-  const [chartMode, setChartMode] =
-    useState<ChartMode>("candles");
+  const [chartMode, setChartMode] = useState<ChartMode>("candles");
   const [candles, setCandles] = useState<Candle[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
   const [autoFollow, setAutoFollow] = useState(true);
-  const [message, setMessage] = useState(
-    "Loading Kodiak market data...",
-  );
+  const [message, setMessage] = useState("Loading Kodiak market data...");
   const [hover, setHover] = useState<HoverCandle | null>(null);
 
   useEffect(() => {
@@ -124,40 +98,28 @@ export function LaunchChart({ mint }: { mint: string }) {
 
     const load = async () => {
       try {
-        const [chartResponse, tradesResponse] =
-          await Promise.all([
-            fetch(
-              `/api/token/${encodeURIComponent(
-                mint,
-              )}/chart?interval=${interval}`,
-              { cache: "no-store" },
-            ),
-            fetch(
-              `/api/token/${encodeURIComponent(mint)}/trades`,
-              { cache: "no-store" },
-            ),
-          ]);
+        const [chartResponse, tradesResponse] = await Promise.all([
+          fetch(
+            `/api/token/${encodeURIComponent(mint)}/chart?interval=${interval}`,
+            { cache: "no-store" },
+          ),
+          fetch(`/api/token/${encodeURIComponent(mint)}/trades`, {
+            cache: "no-store",
+          }),
+        ]);
 
-        const chartPayload =
-          (await chartResponse.json()) as ChartPayload;
-        const tradesPayload =
-          (await tradesResponse.json()) as TradesPayload;
+        const chartPayload = (await chartResponse.json()) as ChartPayload;
+        const tradesPayload = (await tradesResponse.json()) as TradesPayload;
 
         if (!chartResponse.ok) {
-          throw new Error(
-            chartPayload.error || "Unable to load chart.",
-          );
+          throw new Error(chartPayload.error || "Unable to load chart.");
         }
 
         if (!tradesResponse.ok) {
-          throw new Error(
-            tradesPayload.error || "Unable to load trades.",
-          );
+          throw new Error(tradesPayload.error || "Unable to load trades.");
         }
 
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
         const nextCandles = chartPayload.candles ?? [];
         const nextTrades = tradesPayload.trades ?? [];
@@ -206,10 +168,7 @@ export function LaunchChart({ mint }: { mint: string }) {
 
   useEffect(() => {
     const container = containerRef.current;
-
-    if (!container) {
-      return;
-    }
+    if (!container) return;
 
     const chart = createChart(container, {
       width: container.clientWidth,
@@ -222,12 +181,8 @@ export function LaunchChart({ mint }: { mint: string }) {
         textColor: "#a1a1aa",
       },
       grid: {
-        vertLines: {
-          color: "rgba(255,255,255,0.04)",
-        },
-        horzLines: {
-          color: "rgba(255,255,255,0.04)",
-        },
+        vertLines: { color: "rgba(255,255,255,0.04)" },
+        horzLines: { color: "rgba(255,255,255,0.04)" },
       },
       crosshair: {
         vertLine: {
@@ -273,9 +228,7 @@ export function LaunchChart({ mint }: { mint: string }) {
     });
 
     const volumeSeries = chart.addHistogramSeries({
-      priceFormat: {
-        type: "volume",
-      },
+      priceFormat: { type: "volume" },
       priceScaleId: "",
       lastValueVisible: false,
       priceLineVisible: false,
@@ -288,29 +241,21 @@ export function LaunchChart({ mint }: { mint: string }) {
       },
     });
 
-    const handleRangeChange = (
-      range: LogicalRange | null,
-    ) => {
-      if (!range || programmaticMoveRef.current) {
-        return;
-      }
+    const handleRangeChange = (range: LogicalRange | null) => {
+      if (!range || programmaticMoveRef.current) return;
 
       userMovedRef.current = true;
       setAutoFollow(false);
     };
 
-    const handleCrosshairMove = (
-      param: MouseEventParams<Time>,
-    ) => {
+    const handleCrosshairMove = (param: MouseEventParams<Time>) => {
       if (!param.time) {
         setHover(null);
         return;
       }
 
       const candleSeries = candleSeriesRef.current;
-      if (!candleSeries) {
-        return;
-      }
+      if (!candleSeries) return;
 
       const data = param.seriesData.get(candleSeries);
 
@@ -352,9 +297,7 @@ export function LaunchChart({ mint }: { mint: string }) {
 
       chart
         .timeScale()
-        .unsubscribeVisibleLogicalRangeChange(
-          handleRangeChange,
-        );
+        .unsubscribeVisibleLogicalRangeChange(handleRangeChange);
 
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
       chart.remove();
@@ -380,10 +323,7 @@ export function LaunchChart({ mint }: { mint: string }) {
 
   useEffect(() => {
     const chart = chartRef.current;
-
-    if (!chart) {
-      return;
-    }
+    if (!chart) return;
 
     if (candleSeriesRef.current) {
       chart.removeSeries(candleSeriesRef.current);
@@ -409,22 +349,21 @@ export function LaunchChart({ mint }: { mint: string }) {
         },
       });
     } else {
-      candleSeriesRef.current =
-        chart.addCandlestickSeries({
-          upColor: "#39e58c",
-          downColor: "#ff4d67",
-          borderUpColor: "#39e58c",
-          borderDownColor: "#ff4d67",
-          wickUpColor: "#39e58c",
-          wickDownColor: "#ff4d67",
-          priceLineVisible: true,
-          lastValueVisible: true,
-          priceFormat: {
-            type: "price",
-            precision: 10,
-            minMove: 0.0000000001,
-          },
-        });
+      candleSeriesRef.current = chart.addCandlestickSeries({
+        upColor: "#39e58c",
+        downColor: "#ff4d67",
+        borderUpColor: "#39e58c",
+        borderDownColor: "#ff4d67",
+        wickUpColor: "#39e58c",
+        wickDownColor: "#ff4d67",
+        priceLineVisible: true,
+        lastValueVisible: true,
+        priceFormat: {
+          type: "price",
+          precision: 10,
+          minMove: 0.0000000001,
+        },
+      });
     }
   }, [chartMode]);
 
@@ -457,10 +396,7 @@ export function LaunchChart({ mint }: { mint: string }) {
     );
 
     const chart = chartRef.current;
-
-    if (!chart || candles.length === 0) {
-      return;
-    }
+    if (!chart || candles.length === 0) return;
 
     if (!initialFitRef.current) {
       programmaticMoveRef.current = true;
@@ -509,15 +445,13 @@ export function LaunchChart({ mint }: { mint: string }) {
       latestPrice,
       changePercent,
       high: candles.reduce(
-        (highest, candle) =>
-          Math.max(highest, candle.high),
+        (highest, candle) => Math.max(highest, candle.high),
         0,
       ),
       low:
         candles.length > 0
           ? candles.reduce(
-              (lowest, candle) =>
-                Math.min(lowest, candle.low),
+              (lowest, candle) => Math.min(lowest, candle.low),
               candles[0].low,
             )
           : 0,
@@ -542,12 +476,10 @@ export function LaunchChart({ mint }: { mint: string }) {
     programmaticMoveRef.current = true;
 
     if (candles.length <= 20) {
-      chartRef.current
-        ?.timeScale()
-        .setVisibleLogicalRange({
-          from: -6,
-          to: Math.max(24, candles.length + 6),
-        });
+      chartRef.current?.timeScale().setVisibleLogicalRange({
+        from: -6,
+        to: Math.max(24, candles.length + 6),
+      });
     } else {
       chartRef.current?.timeScale().fitContent();
     }
@@ -566,9 +498,7 @@ export function LaunchChart({ mint }: { mint: string }) {
           </p>
 
           <div className="mt-2 flex flex-wrap items-center gap-3">
-            <h2 className="text-2xl font-black">
-              Price chart
-            </h2>
+            <h2 className="text-2xl font-black">Price chart</h2>
 
             {metrics.latestPrice > 0 && (
               <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-xs font-black text-emerald-300">
@@ -656,10 +586,7 @@ export function LaunchChart({ mint }: { mint: string }) {
           label="Low"
           value={`${formatSol(metrics.low)} SOL`}
         />
-        <Stat
-          label="Trades"
-          value={String(trades.length)}
-        />
+        <Stat label="Trades" value={String(trades.length)} />
       </div>
 
       {hover && chartMode === "candles" && (
@@ -691,9 +618,11 @@ export function LaunchChart({ mint }: { mint: string }) {
       <div className="relative mt-4 overflow-hidden rounded-2xl border border-white/10 bg-[#070707]">
         <div
           ref={containerRef}
-          className="min-h-[460px] w-full"
+          className="min-h-[460px] w-full overscroll-contain"
           style={{
-            touchAction: "pan-y pinch-zoom",
+            touchAction: "none",
+            WebkitUserSelect: "none",
+            userSelect: "none",
           }}
         />
 
@@ -708,12 +637,9 @@ export function LaunchChart({ mint }: { mint: string }) {
         {!loading && candles.length === 0 && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
             <div className="max-w-sm rounded-2xl border border-dashed border-white/10 bg-black/70 p-6 text-center">
-              <p className="font-black text-white">
-                No chart data yet
-              </p>
+              <p className="font-black text-white">No chart data yet</p>
               <p className="mt-2 text-sm leading-6 text-zinc-500">
-                The first completed Kodiak trade will create
-                the first price candle.
+                The first completed Kodiak trade will create the first price candle.
               </p>
             </div>
           </div>
@@ -723,8 +649,7 @@ export function LaunchChart({ mint }: { mint: string }) {
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
         <p>{message}</p>
         <p>
-          {trades.length} recorded trade
-          {trades.length === 1 ? "" : "s"}
+          {trades.length} recorded trade{trades.length === 1 ? "" : "s"}
         </p>
       </div>
 

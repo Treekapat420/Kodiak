@@ -1,5 +1,10 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
+import {
+  DEVNET_PROGRAM_ID,
+  getPdaLaunchpadPoolId,
+  LaunchpadPool,
+} from "@raydium-io/raydium-sdk-v2";
 
 export type StoredTrade = {
   mint: string;
@@ -249,6 +254,97 @@ function findLargestNegativeDelta(
   return best;
 }
 
+async function readLaunchpadCurvePrices(
+  mint: string,
+  tokenAmount: number,
+) {
+  try {
+    if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) {
+      return {};
+    }
+
+    const mintA = new PublicKey(mint);
+    const poolId = getPdaLaunchpadPoolId(
+      DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM,
+      mintA,
+      NATIVE_MINT,
+    ).publicKey;
+
+    const account = await connection.getAccountInfo(
+      poolId,
+      "confirmed",
+    );
+
+    if (!account) {
+      return {};
+    }
+
+    const pool = LaunchpadPool.decode(account.data);
+
+    const decimalsA = Number(pool.mintDecimalsA);
+    const decimalsB = Number(pool.mintDecimalsB);
+
+    const virtualARaw = Number(pool.virtualA.toString());
+    const virtualBRaw = Number(pool.virtualB.toString());
+
+    if (
+      !Number.isFinite(virtualARaw) ||
+      !Number.isFinite(virtualBRaw) ||
+      virtualARaw <= 0 ||
+      virtualBRaw <= 0
+    ) {
+      return {};
+    }
+
+    const postA = virtualARaw / 10 ** decimalsA;
+    const postB = virtualBRaw / 10 ** decimalsB;
+    const preA = postA + tokenAmount;
+
+    if (
+      !Number.isFinite(postA) ||
+      !Number.isFinite(postB) ||
+      !Number.isFinite(preA) ||
+      postA <= 0 ||
+      postB <= 0 ||
+      preA <= postA
+    ) {
+      return {};
+    }
+
+    /*
+     * Kodiak currently creates LaunchLab config index 0 / curve index 0,
+     * which is the constant-product bonding curve. Immediately after the
+     * creator buy, k = virtualA * virtualB. Reverse the token amount that
+     * left the curve to recover the pre-buy virtual SOL reserve.
+     */
+    const invariant = postA * postB;
+    const preB = invariant / preA;
+
+    const openPriceSol = preB / preA;
+    const closePriceSol = postB / postA;
+
+    if (
+      !Number.isFinite(openPriceSol) ||
+      !Number.isFinite(closePriceSol) ||
+      openPriceSol <= 0 ||
+      closePriceSol <= 0
+    ) {
+      return {};
+    }
+
+    return {
+      openPriceSol,
+      closePriceSol,
+    };
+  } catch (error) {
+    console.error(
+      "Unable to read LaunchLab curve prices:",
+      error,
+    );
+    return {};
+  }
+}
+
 export async function inferTokenAmount(
   signature: string,
   mint: string,
@@ -314,13 +410,18 @@ export async function inferTokenAmount(
     }
   }
 
+  const curvePrices =
+    await readLaunchpadCurvePrices(mint, tokenAmount);
+
   return {
     tokenAmount,
     timestamp:
       parsed.blockTime ??
       Math.floor(Date.now() / 1000),
-    openPriceSol,
-    closePriceSol,
+    openPriceSol:
+      curvePrices.openPriceSol ?? openPriceSol,
+    closePriceSol:
+      curvePrices.closePriceSol ?? closePriceSol,
   };
 }
 

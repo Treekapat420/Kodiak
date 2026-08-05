@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildCandles, getTrades } from "@/lib/devnet-market";
+import {
+  buildCandles,
+  getTrades,
+} from "@/lib/devnet-market";
 
 export const dynamic = "force-dynamic";
 
@@ -22,35 +25,32 @@ export async function GET(
   try {
     const { mint } = await context.params;
 
-    const requestedInterval =
+    const requested =
       request.nextUrl.searchParams
         .get("interval")
         ?.toLowerCase() ?? "1m";
 
-    const interval =
-      requestedInterval in intervalMap
-        ? requestedInterval
-        : "1m";
+    const interval = intervalMap[requested]
+      ? requested
+      : "1m";
 
     const trades = await getTrades(mint);
-
     const candles = buildCandles(
       trades,
       intervalMap[interval],
-      500,
     );
 
     return NextResponse.json(
       {
         mint,
         interval,
-        intervalSeconds: intervalMap[interval],
-        source: "kodiak-devnet",
+        source: "kodiak-trade-events",
         candles,
       },
       {
         headers: {
-          "Cache-Control": "no-store, max-age=0",
+          "Cache-Control":
+            "no-store, max-age=0",
         },
       },
     );

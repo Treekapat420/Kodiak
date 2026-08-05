@@ -572,7 +572,7 @@ export default function LaunchPage() {
             creator: publicKey.toBase58(),
             name: form.name,
             symbol: form.symbol,
-            signatures: uniqueSignatures,
+            signature: launchSignature,
             createdAt,
           }),
         },
@@ -1030,7 +1030,7 @@ export default function LaunchPage() {
                           : "bg-white/[0.05] text-zinc-600"
                       }`}
                     >
-                      {item.complete ? "OK" : "Â·"}
+                      {item.complete ? "OK" : "-"}
                     </span>
                     <span className={item.complete ? "text-zinc-300" : "text-zinc-600"}>
                       {item.label}

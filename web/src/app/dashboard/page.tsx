@@ -25,9 +25,16 @@ type Ledger = {
   timestamp: number;
 };
 
+type FoundingCreator = {
+  isFoundingCreator: boolean;
+  number: number | null;
+  label: string | null;
+};
+
 type Payload = {
   launches?: Launch[];
   ledger?: Ledger[];
+  foundingCreator?: FoundingCreator;
   totals?: {
     creatorRewardsSol: number;
     kodiakFeesSol: number;
@@ -43,7 +50,7 @@ type Payload = {
 const fmt = (n: number, digits = 6) =>
   Number(n || 0).toLocaleString("en-US", { maximumFractionDigits: digits });
 
-const short = (s: string) => s ? `${s.slice(0, 4)}…${s.slice(-4)}` : "—";
+const short = (s: string) => (s ? `${s.slice(0, 4)}â¦${s.slice(-4)}` : "â");
 
 const ago = (ts: number) => {
   const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
@@ -57,10 +64,15 @@ export default function DashboardPage() {
   const { publicKey } = useWallet();
   const wallet = publicKey?.toBase58() ?? "";
   const [data, setData] = useState<Payload>({});
-  const [status, setStatus] = useState("Connect your wallet to load creator data.");
+  const [status, setStatus] = useState(
+    "Connect your wallet to load creator data.",
+  );
 
   useEffect(() => {
     if (!wallet) {
+      setData({});
+      setStatus("Connect your wallet to load creator data.");
+      return;
     }
 
     let cancelled = false;
@@ -72,18 +84,31 @@ export default function DashboardPage() {
           { cache: "no-store" },
         );
         const payload = (await res.json()) as Payload;
-        if (!res.ok) throw new Error(payload.error || "Unable to load dashboard.");
+
+        if (!res.ok) {
+          throw new Error(payload.error || "Unable to load dashboard.");
+        }
+
         if (!cancelled) {
           setData(payload);
-          setStatus("Live Devnet creator accounting • refreshes every 10 seconds");
+          setStatus(
+            "Live Devnet creator accounting â¢ refreshes every 10 seconds",
+          );
         }
-      } catch (e) {
-        if (!cancelled) setStatus(e instanceof Error ? e.message : "Unable to load dashboard.");
+      } catch (error) {
+        if (!cancelled) {
+          setStatus(
+            error instanceof Error
+              ? error.message
+              : "Unable to load dashboard.",
+          );
+        }
       }
     };
 
     void load();
     const timer = window.setInterval(() => void load(), 10_000);
+
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -99,8 +124,10 @@ export default function DashboardPage() {
     launchCount: 0,
     tradeCount: 0,
   };
+
   const launches = data.launches ?? [];
   const ledger = data.ledger ?? [];
+  const foundingCreator = data.foundingCreator;
 
   return (
     <main className="min-h-screen bg-[#070707] px-4 py-8 text-zinc-100 sm:px-6">
@@ -109,38 +136,72 @@ export default function DashboardPage() {
           <p className="text-xs font-black uppercase tracking-[0.24em] text-emerald-300">
             Creator Dashboard V2
           </p>
+
           <div className="mt-3 flex flex-wrap items-start justify-between gap-5">
             <div>
-              <h1 className="text-4xl font-black sm:text-5xl">Creator Command Center</h1>
+              <h1 className="text-4xl font-black sm:text-5xl">
+                Creator Command Center
+              </h1>
               <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-400">
-                Real launch analytics plus an auditable Devnet accounting ledger for
-                creator rewards and Kodiak&apos;s Creator Success Fund.
+                Real launch analytics plus an auditable Devnet accounting ledger
+                for creator rewards and Kodiak&apos;s Creator Success Fund.
               </p>
               <p className="mt-2 text-xs font-bold text-zinc-500">{status}</p>
             </div>
+
             <div className="flex gap-3">
-              <Link href="/explore" className="rounded-xl border border-white/10 px-4 py-3 text-sm font-black">
+              <Link
+                href="/explore"
+                className="rounded-xl border border-white/10 px-4 py-3 text-sm font-black"
+              >
                 Explore
               </Link>
-              <Link href="/launch" className="rounded-xl bg-emerald-400 px-4 py-3 text-sm font-black text-black">
+              <Link
+                href="/launch"
+                className="rounded-xl bg-emerald-400 px-4 py-3 text-sm font-black text-black"
+              >
                 Launch token
               </Link>
             </div>
           </div>
+
           <div className="mt-6 rounded-2xl border border-white/10 bg-black/25 p-4">
-            <p className="text-xs uppercase tracking-[0.14em] text-zinc-600">Connected creator</p>
-            <p className="mt-2 break-all font-black">{wallet || "Wallet not connected"}</p>
+            <p className="text-xs uppercase tracking-[0.14em] text-zinc-600">
+              Connected creator
+            </p>
+            <p className="mt-2 break-all font-black">
+              {wallet || "Wallet not connected"}
+            </p>
           </div>
+
+          {foundingCreator?.isFoundingCreator && (
+            <div className="mt-5 inline-flex items-center gap-3 rounded-full border border-amber-300/40 bg-amber-300/[0.08] px-5 py-3 text-sm font-black text-amber-300">
+              <span aria-hidden="true">ðï¸</span>
+              <span>
+                {foundingCreator.label ??
+                  `FOUNDING CREATOR #${String(
+                    foundingCreator.number ?? 0,
+                  ).padStart(3, "0")}`}
+              </span>
+            </div>
+          )}
         </header>
 
         <section className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Metric label="Launches" value={String(totals.launchCount)} />
           <Metric label="Recorded trades" value={String(totals.tradeCount)} />
-          <Metric label="Tracked volume" value={`${fmt(totals.trackedVolumeSol)} SOL`} />
-          <Metric label="Creator tracked" value={`${fmt(totals.creatorRewardsSol, 8)} SOL`} accent />
+          <Metric
+            label="Tracked volume"
+            value={`${fmt(totals.trackedVolumeSol)} SOL`}
+          />
+          <Metric
+            label="Creator tracked"
+            value={`${fmt(totals.creatorRewardsSol, 8)} SOL`}
+            accent
+          />
         </section>
 
-                <ClaimCreatorRewards />
+        <ClaimCreatorRewards />
 
         <section className="mt-6 grid gap-6 lg:grid-cols-2">
           <Card title="Fee ledger totals" eyebrow="Revenue accounting">
@@ -151,7 +212,7 @@ export default function DashboardPage() {
               <Box label="Success Fund" value={`${fmt(totals.successFundSol, 8)} SOL`} note="5% of Kodiak revenue" />
             </div>
             <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/[0.05] p-4">
-              <p className="font-black text-amber-200">Kodiak audit ledger — separate from Raydium&apos;s on-chain vault.</p>
+              <p className="font-black text-amber-200">Kodiak audit ledger â separate from Raydium&apos;s on-chain vault.</p>
               <p className="mt-2 text-xs leading-6 text-zinc-500">
                 The ledger records what would accrue under Kodiak&apos;s current Devnet fee model.
                 On-chain fee transfer, escrow, and claims still need to be implemented before mainnet.
@@ -209,8 +270,8 @@ export default function DashboardPage() {
             {ledger.length ? ledger.slice(0, 100).map((e) => (
               <div key={e.id} className="grid gap-3 border-b border-white/[0.06] bg-black/20 p-4 sm:grid-cols-[1fr_auto_auto]">
                 <div>
-                  <p className="text-sm font-black">{e.side.toUpperCase()} • {short(e.mint)}</p>
-                  <p className="mt-1 text-xs text-zinc-600">{fmt(e.solAmount)} SOL trade • {ago(e.timestamp)}</p>
+                  <p className="text-sm font-black">{e.side.toUpperCase()} â¢ {short(e.mint)}</p>
+                  <p className="mt-1 text-xs text-zinc-600">{fmt(e.solAmount)} SOL trade â¢ {ago(e.timestamp)}</p>
                 </div>
                 <div className="sm:text-right">
                   <p className="text-xs text-zinc-600">Creator</p>

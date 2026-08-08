@@ -503,16 +503,25 @@ export function buildCandles(
       Math.floor(trade.timestamp / intervalSeconds) *
       intervalSeconds;
 
+    /*
+     * Candles represent the bonding-curve spot price path.
+     *
+     * trade.priceSol is the average execution price across the trade.
+     * That average can sit below the post-sell spot price (or above the
+     * post-buy spot price), so including it in candle high/low creates
+     * misleading long wicks.
+     *
+     * Use only the stored pre-trade and post-trade spot prices for OHLC.
+     * executionPrice remains available on the trade record for analytics.
+     */
     const eventHigh = Math.max(
       safeOpen,
       eventClose,
-      executionPrice,
     );
 
     const eventLow = Math.min(
       safeOpen,
       eventClose,
-      executionPrice,
     );
 
     const current = buckets.get(time);

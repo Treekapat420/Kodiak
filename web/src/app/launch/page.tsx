@@ -29,6 +29,15 @@ type FormState = {
   postMigrationFee: boolean;
 };
 
+type SimulationDiagnostic = {
+  passed: boolean;
+  transactionCount: number;
+  passedCount: number;
+  checkedAt: string;
+  walletHandoffStarted: boolean;
+  walletError?: string;
+};
+
 const steps = ["Project", "Branding", "Socials", "Launch", "Review"];
 const storageKey = "kodiak-launch-draft-v2";
 
@@ -95,6 +104,8 @@ export default function LaunchPage() {
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [bannerPreview, setBannerPreview] = useState<string | null>(null);
   const [draftLoaded, setDraftLoaded] = useState(false);
+  const [simulationDiagnostic, setSimulationDiagnostic] =
+    useState<SimulationDiagnostic | null>(null);
   const [launchStatus, setLaunchStatus] = useState<
     | { kind: "idle"; message: string }
     | { kind: "working"; message: string }
@@ -187,7 +198,7 @@ export default function LaunchPage() {
     [bannerPreview, form, logoPreview],
   );
 
-  const estimatedCost = "~ 0.02 SOL + network fees";
+  const estimatedCost = "â 0.02 SOL + network fees";
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -214,6 +225,7 @@ export default function LaunchPage() {
     setForm(initialForm);
     setLogoPreview(null);
     setBannerPreview(null);
+    setSimulationDiagnostic(null);
     setLaunchStatus({
       kind: "idle",
       message: "Ready to prepare a Devnet launch.",
@@ -265,12 +277,18 @@ export default function LaunchPage() {
       return;
     }
 
+    setSimulationDiagnostic(null);
+
+    let kodiakSimulationPassed = false;
+    let transactionCount = 0;
+    let passedCount = 0;
+
     try {
       const platformId = new PublicKey(platformIdValue);
 
       setLaunchStatus({
         kind: "working",
-        message: "Uploading the token image and metadata to IPFS...",
+        message: "Uploading the token image and metadata to IPFSâ¦",
       });
 
       const metadataForm = new FormData();
@@ -309,7 +327,7 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "working",
-        message: "Building the Raydium LaunchLab transaction...",
+        message: "Building the Raydium LaunchLab transactionâ¦",
       });
 
       const programId = DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM;
@@ -383,9 +401,13 @@ export default function LaunchPage() {
           extraSigners: [mintKeypair],
         });
 
+      transactionCount = transactions.length;
+
       setLaunchStatus({
         kind: "working",
-        message: "Simulating every Devnet launch transaction...",
+        message: `Simulating ${transactionCount} Devnet launch transaction${
+          transactionCount === 1 ? "" : "s"
+        }...`,
       });
 
       for (let index = 0; index < transactions.length; index += 1) {
@@ -400,21 +422,41 @@ export default function LaunchPage() {
             : await connection.simulateTransaction(transaction);
 
         if (simulation.value.err) {
+          setSimulationDiagnostic({
+            passed: false,
+            transactionCount,
+            passedCount,
+            checkedAt: new Date().toLocaleTimeString(),
+            walletHandoffStarted: false,
+          });
+
           setLaunchStatus({
             kind: "error",
-            message: `Launch simulation failed at transaction ${
+            message: `Kodiak simulation failed at transaction ${
               index + 1
-            }: ${JSON.stringify(simulation.value.err)}`,
+            } of ${transactionCount}: ${JSON.stringify(simulation.value.err)}`,
             logs: simulation.value.logs ?? [],
           });
           return;
         }
+
+        passedCount += 1;
       }
+
+      kodiakSimulationPassed = true;
+
+      setSimulationDiagnostic({
+        passed: true,
+        transactionCount,
+        passedCount,
+        checkedAt: new Date().toLocaleTimeString(),
+        walletHandoffStarted: true,
+      });
 
       setLaunchStatus({
         kind: "working",
         message:
-          "Simulation passed. Approve the Devnet launch transaction in Phantom...",
+          "Kodiak simulation PASSED. The transaction is now being handed to Phantom for wallet approval.",
       });
 
       const sent = await execute({ sequentially: true });
@@ -458,7 +500,7 @@ export default function LaunchPage() {
       if (uniqueSignatures.length === 0) {
         setLaunchStatus({
           kind: "working",
-          message: "Locating the confirmed launch transaction on Devnet...",
+          message: "Locating the confirmed launch transaction on Devnetâ¦",
         });
 
         for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -557,7 +599,7 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "working",
-        message: "Registering the verified launch in the Creator Dashboard...",
+        message: "Registering the verified launch in the Creator Dashboardâ¦",
       });
 
       const registrationResponse = await fetch(
@@ -609,12 +651,33 @@ export default function LaunchPage() {
             )
           : undefined;
 
+      const walletOrLaunchError =
+        error instanceof Error
+          ? error.message
+          : "Unable to prepare the Devnet launch.";
+
+      if (kodiakSimulationPassed) {
+        setSimulationDiagnostic((current) => ({
+          passed: true,
+          transactionCount: current?.transactionCount ?? transactionCount,
+          passedCount: current?.passedCount ?? passedCount,
+          checkedAt: current?.checkedAt ?? new Date().toLocaleTimeString(),
+          walletHandoffStarted: true,
+          walletError: walletOrLaunchError,
+        }));
+
+        setLaunchStatus({
+          kind: "error",
+          message:
+            `Kodiak simulation PASSED, but Phantom did not submit the transaction. Wallet response: ${walletOrLaunchError}`,
+          logs,
+        });
+        return;
+      }
+
       setLaunchStatus({
         kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "Unable to prepare the Devnet launch.",
+        message: walletOrLaunchError,
         logs,
       });
     }
@@ -918,9 +981,60 @@ export default function LaunchPage() {
                       className="w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {launchStatus.kind === "working"
-                        ? "Preparing Devnet launch..."
+                        ? "Preparing Devnet launchâ¦"
                         : "Prepare Launch Transaction"}
                     </button>
+
+                    {simulationDiagnostic && (
+                      <div
+                        className={`rounded-2xl border p-4 ${
+                          simulationDiagnostic.passed
+                            ? "border-emerald-400/30 bg-emerald-400/[0.07]"
+                            : "border-red-400/30 bg-red-400/[0.07]"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-4">
+                          <p
+                            className={`text-sm font-black ${
+                              simulationDiagnostic.passed
+                                ? "text-emerald-300"
+                                : "text-red-300"
+                            }`}
+                          >
+                            Kodiak pre-wallet simulation:{" "}
+                            {simulationDiagnostic.passed ? "PASSED" : "FAILED"}
+                          </p>
+                          <span className="text-xs text-zinc-600">
+                            {simulationDiagnostic.checkedAt}
+                          </span>
+                        </div>
+
+                        <p className="mt-2 text-xs leading-5 text-zinc-400">
+                          {simulationDiagnostic.passedCount} of{" "}
+                          {simulationDiagnostic.transactionCount} transaction
+                          {simulationDiagnostic.transactionCount === 1 ? "" : "s"}{" "}
+                          passed Kodiak&apos;s Solana RPC simulation.
+                        </p>
+
+                        {simulationDiagnostic.walletHandoffStarted && (
+                          <p className="mt-2 text-xs leading-5 text-zinc-400">
+                            Wallet handoff started after the successful Kodiak
+                            simulation.
+                          </p>
+                        )}
+
+                        {simulationDiagnostic.walletError && (
+                          <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/[0.05] p-3">
+                            <p className="text-xs font-black text-amber-300">
+                              Phantom / wallet response
+                            </p>
+                            <p className="mt-1 break-words text-xs leading-5 text-zinc-300">
+                              {simulationDiagnostic.walletError}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <div
                       className={`rounded-2xl border p-4 text-sm ${
@@ -1030,7 +1144,7 @@ export default function LaunchPage() {
                           : "bg-white/[0.05] text-zinc-600"
                       }`}
                     >
-                      {item.complete ? "OK" : "-"}
+                      {item.complete ? "â" : "Â·"}
                     </span>
                     <span className={item.complete ? "text-zinc-300" : "text-zinc-600"}>
                       {item.label}

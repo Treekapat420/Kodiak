@@ -26,6 +26,7 @@ type InferredTrade = {
   timestamp: number;
   openPriceSol?: number;
   closePriceSol?: number;
+  slot?: number;
 };
 
 type TokenBalance = {
@@ -94,6 +95,10 @@ const tradeKey = (mint: string) =>
 
 const signatureKey = (mint: string) =>
   `kodiak:devnet:trade-signatures:${mint}`;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function balanceAmount(value: {
   uiTokenAmount?: {
@@ -169,17 +174,17 @@ function deltaForAccount(
   };
 }
 
-function findLargestPositiveDelta(
+function findOwnerTokenDelta(
   pre: TokenBalance[],
   post: TokenBalance[],
   mint: string,
-  owner?: string,
+  owner: string,
 ) {
   const indexes = new Set<number>();
 
   for (const row of [...pre, ...post]) {
     if (row.mint !== mint) continue;
-    if (owner && row.owner !== owner) continue;
+    if (row.owner !== owner) continue;
     indexes.add(row.accountIndex);
   }
 
@@ -193,19 +198,22 @@ function findLargestPositiveDelta(
     | undefined;
 
   for (const accountIndex of indexes) {
-    const delta = deltaForAccount(
+    const next = deltaForAccount(
       pre,
       post,
       accountIndex,
       mint,
     );
 
-    if (delta.delta <= 0) continue;
+    if (next.delta === 0) continue;
 
-    if (!best || delta.delta > best.delta) {
+    if (
+      !best ||
+      Math.abs(next.delta) > Math.abs(best.delta)
+    ) {
       best = {
         accountIndex,
-        ...delta,
+        ...next,
       };
     }
   }
@@ -213,10 +221,11 @@ function findLargestPositiveDelta(
   return best;
 }
 
-function findLargestNegativeDelta(
+function findPoolTokenDelta(
   pre: TokenBalance[],
   post: TokenBalance[],
   mint: string,
+  side: "buy" | "sell",
 ) {
   const indexes = new Set<number>();
 
@@ -236,19 +245,27 @@ function findLargestNegativeDelta(
     | undefined;
 
   for (const accountIndex of indexes) {
-    const delta = deltaForAccount(
+    const next = deltaForAccount(
       pre,
       post,
       accountIndex,
       mint,
     );
 
-    if (delta.delta >= 0) continue;
+    const directionMatches =
+      side === "buy"
+        ? next.delta < 0
+        : next.delta > 0;
 
-    if (!best || delta.delta < best.delta) {
+    if (!directionMatches) continue;
+
+    if (
+      !best ||
+      Math.abs(next.delta) > Math.abs(best.delta)
+    ) {
       best = {
         accountIndex,
-        ...delta,
+        ...next,
       };
     }
   }
@@ -258,70 +275,103 @@ function findLargestNegativeDelta(
 
 async function readLaunchpadCurvePrices(
   mint: string,
+  minContextSlot: number,
 ): Promise<{
   openPriceSol?: number;
   closePriceSol?: number;
 }> {
-  try {
-    const mintA = new PublicKey(mint);
-    const poolId = getPdaLaunchpadPoolId(
-      DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM,
-      mintA,
-      NATIVE_MINT,
-    ).publicKey;
+  const mintA = new PublicKey(mint);
+  const poolId = getPdaLaunchpadPoolId(
+    DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM,
+    mintA,
+    NATIVE_MINT,
+  ).publicKey;
 
-    const poolAccount = await connection.getAccountInfo(
-      poolId,
-      "confirmed",
-    );
+  let lastError: unknown;
 
-    if (!poolAccount) {
-      return {};
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      const poolAccount = await connection.getAccountInfo(
+        poolId,
+        {
+          commitment: "confirmed",
+          minContextSlot,
+        },
+      );
+
+      if (!poolAccount) {
+        throw new Error("LaunchLab pool account is not available yet.");
+      }
+
+      const poolInfo = LaunchpadPool.decode(poolAccount.data);
+
+      const configAccount = await connection.getAccountInfo(
+        poolInfo.configId,
+        {
+          commitment: "confirmed",
+          minContextSlot,
+        },
+      );
+
+      if (!configAccount) {
+        throw new Error("LaunchLab config account is not available yet.");
+      }
+
+      const configInfo = LaunchpadConfig.decode(
+        configAccount.data,
+      );
+
+      const openPriceSol = Curve.getPoolInitPriceByPool({
+        poolInfo,
+        curveType: configInfo.curveType,
+        decimalA: poolInfo.mintDecimalsA,
+        decimalB: poolInfo.mintDecimalsB,
+      }).toNumber();
+
+      const closePriceSol = Curve.getPrice({
+        poolInfo,
+        curveType: configInfo.curveType,
+        decimalA: poolInfo.mintDecimalsA,
+        decimalB: poolInfo.mintDecimalsB,
+      }).toNumber();
+
+      if (
+        !Number.isFinite(openPriceSol) ||
+        !Number.isFinite(closePriceSol) ||
+        openPriceSol <= 0 ||
+        closePriceSol <= 0
+      ) {
+        throw new Error(
+          "LaunchLab returned an invalid bonding-curve spot price.",
+        );
+      }
+
+      return {
+        openPriceSol,
+        closePriceSol,
+      };
+    } catch (error) {
+      lastError = error;
+
+      if (attempt < 5) {
+        await sleep(700 + attempt * 350);
+      }
     }
-
-    const poolInfo = LaunchpadPool.decode(poolAccount.data);
-
-    const configAccount = await connection.getAccountInfo(
-      poolInfo.configId,
-      "confirmed",
-    );
-
-    if (!configAccount) {
-      return {};
-    }
-
-    const configInfo = LaunchpadConfig.decode(
-      configAccount.data,
-    );
-
-    const closePriceSol = Curve.getPrice({
-      poolInfo,
-      curveType: configInfo.curveType,
-      decimalA: poolInfo.mintDecimalsA,
-      decimalB: poolInfo.mintDecimalsB,
-    }).toNumber();
-
-    if (
-      !Number.isFinite(closePriceSol) ||
-      closePriceSol <= 0
-    ) {
-      return {};
-    }
-
-    return { closePriceSol };
-  } catch (error) {
-    console.error(
-      "Unable to read official LaunchLab curve price:",
-      error,
-    );
-    return {};
   }
+
+  console.error(
+    "Unable to read confirmed LaunchLab curve state:",
+    lastError,
+  );
+
+  return {};
 }
 
 export async function inferTokenAmount(
   signature: string,
   mint: string,
   wallet: string,
+  side: "buy" | "sell" = "buy",
 ): Promise<InferredTrade> {
   const parsed = await connection.getParsedTransaction(
     signature,
@@ -338,63 +388,79 @@ export async function inferTokenAmount(
     };
   }
 
+  if (parsed.meta?.err) {
+    return {
+      tokenAmount: 0,
+      timestamp:
+        parsed.blockTime ??
+        Math.floor(Date.now() / 1000),
+      slot: parsed.slot,
+    };
+  }
+
   const owner = new PublicKey(wallet).toBase58();
   const pre = collectBalances(parsed.meta?.preTokenBalances);
   const post = collectBalances(parsed.meta?.postTokenBalances);
 
-  const ownerIncrease =
-    findLargestPositiveDelta(pre, post, mint, owner);
+  const ownerDelta = findOwnerTokenDelta(
+    pre,
+    post,
+    mint,
+    owner,
+  );
 
-  const anyIncrease =
-    ownerIncrease ??
-    findLargestPositiveDelta(pre, post, mint);
+  const ownerDirectionMatches = ownerDelta
+    ? side === "buy"
+      ? ownerDelta.delta > 0
+      : ownerDelta.delta < 0
+    : false;
 
-  const tokenAmount = Math.abs(anyIncrease?.delta ?? 0);
+  const poolDelta = findPoolTokenDelta(
+    pre,
+    post,
+    mint,
+    side,
+  );
 
-  const tokenReserve =
-    findLargestNegativeDelta(pre, post, mint);
+  const tokenAmount = Math.abs(
+    ownerDirectionMatches
+      ? ownerDelta?.delta ?? 0
+      : poolDelta?.delta ?? 0,
+  );
 
-  const quoteMint = NATIVE_MINT.toBase58();
-  const quoteReserve =
-    findLargestPositiveDelta(pre, post, quoteMint);
-
-  let openPriceSol: number | undefined;
-  let closePriceSol: number | undefined;
-
-  if (
-    tokenReserve &&
-    quoteReserve &&
-    tokenReserve.before > 0 &&
-    tokenReserve.after > 0 &&
-    quoteReserve.before >= 0 &&
-    quoteReserve.after > 0
-  ) {
-    const before =
-      quoteReserve.before / tokenReserve.before;
-    const after =
-      quoteReserve.after / tokenReserve.after;
-
-    if (Number.isFinite(before) && before > 0) {
-      openPriceSol = before;
-    }
-
-    if (Number.isFinite(after) && after > 0) {
-      closePriceSol = after;
-    }
+  if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) {
+    return {
+      tokenAmount: 0,
+      timestamp:
+        parsed.blockTime ??
+        Math.floor(Date.now() / 1000),
+      slot: parsed.slot,
+    };
   }
 
-  const curvePrices =
-    await readLaunchpadCurvePrices(mint);
+  /*
+   * IMPORTANT:
+   * Do not calculate chart prices from ordinary SPL-token vault balances.
+   * LaunchLab pricing uses virtual reserves, so a WSOL/token account ratio
+   * is not the bonding-curve spot price.
+   *
+   * Read Raydium's actual decoded LaunchpadPool instead. minContextSlot
+   * prevents this server from accepting pool state older than the confirmed
+   * trade transaction.
+   */
+  const curvePrices = await readLaunchpadCurvePrices(
+    mint,
+    parsed.slot,
+  );
 
   return {
     tokenAmount,
     timestamp:
       parsed.blockTime ??
       Math.floor(Date.now() / 1000),
-    openPriceSol:
-      curvePrices.openPriceSol ?? openPriceSol,
-    closePriceSol:
-      curvePrices.closePriceSol ?? closePriceSol,
+    openPriceSol: curvePrices.openPriceSol,
+    closePriceSol: curvePrices.closePriceSol,
+    slot: parsed.slot,
   };
 }
 
@@ -479,49 +545,56 @@ export function buildCandles(
   let previousClose = 0;
 
   for (const trade of trades) {
-    const executionPrice = Number(trade.priceSol);
-    const eventOpen = Number(
-      trade.openPriceSol ?? previousClose ?? executionPrice,
-    );
-    const eventClose = Number(
-      trade.closePriceSol ?? executionPrice,
-    );
+    const storedOpen = Number(trade.openPriceSol);
+    const storedClose = Number(trade.closePriceSol);
 
     if (
-      !Number.isFinite(eventClose) ||
-      eventClose <= 0
+      !Number.isFinite(storedClose) ||
+      storedClose <= 0
     ) {
       continue;
     }
 
-    const safeOpen =
-      Number.isFinite(eventOpen) && eventOpen > 0
-        ? eventOpen
-        : eventClose;
+    const eventOpen =
+      Number.isFinite(previousClose) && previousClose > 0
+        ? previousClose
+        : Number.isFinite(storedOpen) && storedOpen > 0
+          ? storedOpen
+          : 0;
+
+    if (!Number.isFinite(eventOpen) || eventOpen <= 0) {
+      continue;
+    }
+
+    /*
+     * A LaunchLab bonding-curve buy must move spot price upward.
+     * A sell must move it downward.
+     *
+     * If an old/stale stored record violates that invariant, do not turn it
+     * into a fake candle. New trades are rejected by the POST route before
+     * they can be saved in this state.
+     */
+    const directionIsValid =
+      trade.side === "buy"
+        ? storedClose > eventOpen
+        : storedClose < eventOpen;
+
+    if (!directionIsValid) {
+      continue;
+    }
 
     const time =
       Math.floor(trade.timestamp / intervalSeconds) *
       intervalSeconds;
 
-    /*
-     * Candles represent the bonding-curve spot price path.
-     *
-     * trade.priceSol is the average execution price across the trade.
-     * That average can sit below the post-sell spot price (or above the
-     * post-buy spot price), so including it in candle high/low creates
-     * misleading long wicks.
-     *
-     * Use only the stored pre-trade and post-trade spot prices for OHLC.
-     * executionPrice remains available on the trade record for analytics.
-     */
     const eventHigh = Math.max(
-      safeOpen,
-      eventClose,
+      eventOpen,
+      storedClose,
     );
 
     const eventLow = Math.min(
-      safeOpen,
-      eventClose,
+      eventOpen,
+      storedClose,
     );
 
     const current = buckets.get(time);
@@ -529,11 +602,11 @@ export function buildCandles(
     if (!current) {
       buckets.set(time, {
         time,
-        open: safeOpen,
+        open: eventOpen,
         high: eventHigh,
         low: eventLow,
-        close: eventClose,
-        volume: Number(trade.solAmount || 0),
+        close: storedClose,
+        volume: Math.abs(Number(trade.solAmount || 0)),
       });
     } else {
       current.high = Math.max(
@@ -544,13 +617,13 @@ export function buildCandles(
         current.low,
         eventLow,
       );
-      current.close = eventClose;
-      current.volume += Number(
-        trade.solAmount || 0,
+      current.close = storedClose;
+      current.volume += Math.abs(
+        Number(trade.solAmount || 0),
       );
     }
 
-    previousClose = eventClose;
+    previousClose = storedClose;
   }
 
   return [...buckets.values()].sort(

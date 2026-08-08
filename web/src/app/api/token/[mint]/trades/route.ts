@@ -115,6 +115,7 @@ export async function POST(
           signature,
           mint,
           wallet,
+          side,
         );
 
         if (
@@ -126,7 +127,7 @@ export async function POST(
           break;
         }
       } catch {
-        // Try the next confirmed transaction.
+        // Try the next confirmed transaction signature.
       }
     }
 
@@ -157,98 +158,78 @@ export async function POST(
       );
     }
 
-    const previousTrade = existingTrades.at(-1);
-
-    const previousClose = Number(
-      previousTrade?.closePriceSol ??
-        previousTrade?.priceSol,
-    );
-
     const officialClose = Number(
       inferred.closePriceSol,
     );
 
     /*
-     * Raydium's post-trade LaunchLab spot price is the preferred candle close.
-     * The execution price is only the average price across the trade and must
-     * not override a valid post-trade spot price.
+     * OHLC MUST come from Raydium's decoded LaunchLab bonding-curve state.
+     * Never substitute average execution price or a raw token-vault ratio.
      */
-    const officialCloseIsUsable =
-      Number.isFinite(officialClose) &&
-      officialClose > 0 &&
-      officialClose >= executionPrice * 0.5 &&
-      officialClose <= executionPrice * 2;
+    if (
+      !Number.isFinite(officialClose) ||
+      officialClose <= 0
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Raydium's confirmed post-trade bonding-curve spot price is not available yet. Kodiak will retry instead of drawing an estimated candle.",
+          retryable: true,
+        },
+        { status: 409 },
+      );
+    }
 
-    const postTradeSpotPrice =
-      officialCloseIsUsable
-        ? officialClose
-        : executionPrice;
+    const previousTrade = existingTrades.at(-1);
+
+    const previousClose = Number(
+      previousTrade?.closePriceSol,
+    );
 
     let openPriceSol: number;
-    let closePriceSol: number;
 
     if (
       Number.isFinite(previousClose) &&
       previousClose > 0
     ) {
-      /*
-       * Every later candle starts exactly where the prior candle ended.
-       * The close is the post-trade spot price, not the average execution price.
-       */
       openPriceSol = previousClose;
-      closePriceSol = postTradeSpotPrice;
     } else {
-      /*
-       * First trade: there is no prior stored close. Use the execution price
-       * and the official post-trade spot price to create the opening candle.
-       */
-      const inferredOpen = Number(
+      const officialInitialPrice = Number(
         inferred.openPriceSol,
       );
 
-      const firstOpenCandidate =
-        Number.isFinite(inferredOpen) &&
-        inferredOpen > 0
-          ? inferredOpen
-          : executionPrice;
-
-      if (side === "buy") {
-        openPriceSol = Math.min(
-          firstOpenCandidate,
-          executionPrice,
-          postTradeSpotPrice,
-        );
-        closePriceSol = Math.max(
-          firstOpenCandidate,
-          executionPrice,
-          postTradeSpotPrice,
-        );
-      } else {
-        openPriceSol = Math.max(
-          firstOpenCandidate,
-          executionPrice,
-          postTradeSpotPrice,
-        );
-        closePriceSol = Math.min(
-          firstOpenCandidate,
-          executionPrice,
-          postTradeSpotPrice,
+      if (
+        !Number.isFinite(officialInitialPrice) ||
+        officialInitialPrice <= 0
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Raydium's LaunchLab opening spot price is not available yet. Kodiak will retry instead of estimating the first candle.",
+            retryable: true,
+          },
+          { status: 409 },
         );
       }
+
+      openPriceSol = officialInitialPrice;
     }
 
-    if (
-      !Number.isFinite(openPriceSol) ||
-      !Number.isFinite(closePriceSol) ||
-      openPriceSol <= 0 ||
-      closePriceSol <= 0
-    ) {
+    const directionIsCorrect =
+      side === "buy"
+        ? officialClose > openPriceSol
+        : officialClose < openPriceSol;
+
+    if (!directionIsCorrect) {
       return NextResponse.json(
         {
           error:
-            "Kodiak could not determine valid pre-trade and post-trade prices.",
+            side === "buy"
+              ? "The chart RPC has not caught up to this buy yet. Kodiak will retry rather than record a buy that lowers the bonding-curve spot price."
+              : "The chart RPC has not caught up to this sell yet. Kodiak will retry rather than record a sell that raises the bonding-curve spot price.",
+          retryable: true,
         },
-        { status: 422 },
+        { status: 409 },
       );
     }
 
@@ -261,7 +242,7 @@ export async function POST(
       tokenAmount: inferred.tokenAmount,
       priceSol: executionPrice,
       openPriceSol,
-      closePriceSol,
+      closePriceSol: officialClose,
       timestamp: inferred.timestamp,
     };
 

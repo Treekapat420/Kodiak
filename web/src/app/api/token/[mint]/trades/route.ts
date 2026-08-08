@@ -31,9 +31,7 @@ export async function GET(
 
     return NextResponse.json({
       mint,
-      trades: [...trades]
-        .reverse()
-        .slice(0, 100),
+      trades: [...trades].reverse().slice(0, 100),
     });
   } catch (error) {
     return NextResponse.json(
@@ -54,8 +52,7 @@ export async function POST(
 ) {
   try {
     const { mint } = await context.params;
-    const body =
-      (await request.json()) as TradeRequest;
+    const body = (await request.json()) as TradeRequest;
 
     const wallet = body.wallet?.trim() ?? "";
     const side = body.side ?? "buy";
@@ -95,11 +92,8 @@ export async function POST(
 
     const existingTrades = await getTrades(mint);
 
-    const existing = existingTrades.find(
-      (trade) =>
-        candidateSignatures.includes(
-          trade.signature,
-        ),
+    const existing = existingTrades.find((trade) =>
+      candidateSignatures.includes(trade.signature),
     );
 
     if (existing) {
@@ -112,9 +106,7 @@ export async function POST(
 
     let selectedSignature = "";
     let inferred:
-      | Awaited<
-          ReturnType<typeof inferTokenAmount>
-        >
+      | Awaited<ReturnType<typeof inferTokenAmount>>
       | undefined;
 
     for (const signature of candidateSignatures) {
@@ -142,7 +134,7 @@ export async function POST(
       return NextResponse.json(
         {
           error:
-            "The launch was confirmed, but none of its transactions exposed the creator token balance change yet. Retry shortly.",
+            "The confirmed transaction did not expose the wallet token balance change yet. Retry shortly.",
           retryable: true,
         },
         { status: 409 },
@@ -165,55 +157,99 @@ export async function POST(
       );
     }
 
-    const previousClose =
-      existingTrades.at(-1)?.closePriceSol ??
-      existingTrades.at(-1)?.priceSol;
+    const previousTrade = existingTrades.at(-1);
+
+    const previousClose = Number(
+      previousTrade?.closePriceSol ??
+        previousTrade?.priceSol,
+    );
 
     const officialClose = Number(
       inferred.closePriceSol,
     );
 
+    /*
+     * Raydium's post-trade LaunchLab spot price is the preferred candle close.
+     * The execution price is only the average price across the trade and must
+     * not override a valid post-trade spot price.
+     */
     const officialCloseIsUsable =
       Number.isFinite(officialClose) &&
       officialClose > 0 &&
       officialClose >= executionPrice * 0.5 &&
       officialClose <= executionPrice * 2;
 
-    const currentPrice = officialCloseIsUsable
-      ? officialClose
-      : executionPrice;
+    const postTradeSpotPrice =
+      officialCloseIsUsable
+        ? officialClose
+        : executionPrice;
 
     let openPriceSol: number;
     let closePriceSol: number;
 
     if (
       Number.isFinite(previousClose) &&
-      Number(previousClose) > 0
+      previousClose > 0
     ) {
-      openPriceSol = Number(previousClose);
-
-      closePriceSol =
-        side === "buy"
-          ? Math.max(
-              openPriceSol,
-              executionPrice,
-              currentPrice,
-            )
-          : Math.min(
-              openPriceSol,
-              executionPrice,
-              currentPrice,
-            );
+      /*
+       * Every later candle starts exactly where the prior candle ended.
+       * The close is the post-trade spot price, not the average execution price.
+       */
+      openPriceSol = previousClose;
+      closePriceSol = postTradeSpotPrice;
     } else {
-      openPriceSol =
-        side === "buy"
-          ? Math.min(executionPrice, currentPrice)
-          : Math.max(executionPrice, currentPrice);
+      /*
+       * First trade: there is no prior stored close. Use the execution price
+       * and the official post-trade spot price to create the opening candle.
+       */
+      const inferredOpen = Number(
+        inferred.openPriceSol,
+      );
 
-      closePriceSol =
-        side === "buy"
-          ? Math.max(executionPrice, currentPrice)
-          : Math.min(executionPrice, currentPrice);
+      const firstOpenCandidate =
+        Number.isFinite(inferredOpen) &&
+        inferredOpen > 0
+          ? inferredOpen
+          : executionPrice;
+
+      if (side === "buy") {
+        openPriceSol = Math.min(
+          firstOpenCandidate,
+          executionPrice,
+          postTradeSpotPrice,
+        );
+        closePriceSol = Math.max(
+          firstOpenCandidate,
+          executionPrice,
+          postTradeSpotPrice,
+        );
+      } else {
+        openPriceSol = Math.max(
+          firstOpenCandidate,
+          executionPrice,
+          postTradeSpotPrice,
+        );
+        closePriceSol = Math.min(
+          firstOpenCandidate,
+          executionPrice,
+          postTradeSpotPrice,
+        );
+      }
+    }
+
+    if (
+      !Number.isFinite(openPriceSol) ||
+      !Number.isFinite(closePriceSol) ||
+      openPriceSol <= 0 ||
+      closePriceSol <= 0
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Kodiak could not determine valid pre-trade and post-trade prices.",
+        },
+        { status: 422 },
+      );
     }
 
     const trade: StoredTrade = {

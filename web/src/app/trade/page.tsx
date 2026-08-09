@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import BN from "bn.js";
 import { getPdaLaunchpadPoolId, PlatformConfig, TxVersion } from "@raydium-io/raydium-sdk-v2";
-import { PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
+import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
@@ -15,61 +15,6 @@ type Status =
   | { kind: "working"; message: string }
   | { kind: "success"; message: string; signature?: string }
   | { kind: "error"; message: string; logs?: string[] };
-
-type PhantomDiagnostic = {
-  side: "buy" | "sell";
-  transactionType: "versioned" | "legacy";
-  requiredSignatures: number;
-  existingSignatures: number;
-  serializedBytes: number;
-  sizeLimitBytes: number;
-  kodiakSimulationPassed: boolean;
-};
-
-function hasNonZeroSignature(signature: Uint8Array | null | undefined) {
-  return Boolean(
-    signature &&
-      signature.length > 0 &&
-      signature.some((byte) => byte !== 0),
-  );
-}
-
-function inspectTransaction(
-  transaction: Transaction | VersionedTransaction,
-  side: "buy" | "sell",
-): PhantomDiagnostic {
-  if (transaction instanceof VersionedTransaction) {
-    return {
-      side,
-      transactionType: "versioned",
-      requiredSignatures:
-        transaction.message.header.numRequiredSignatures,
-      existingSignatures:
-        transaction.signatures.filter(hasNonZeroSignature).length,
-      serializedBytes: transaction.serialize().length,
-      sizeLimitBytes: 1232,
-      kodiakSimulationPassed: false,
-    };
-  }
-
-  const message = transaction.compileMessage();
-
-  return {
-    side,
-    transactionType: "legacy",
-    requiredSignatures: message.header.numRequiredSignatures,
-    existingSignatures:
-      transaction.signatures.filter((item) =>
-        hasNonZeroSignature(item.signature),
-      ).length,
-    serializedBytes: transaction.serialize({
-      requireAllSignatures: false,
-      verifySignatures: false,
-    }).length,
-    sizeLimitBytes: 1232,
-    kodiakSimulationPassed: false,
-  };
-}
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 
@@ -127,8 +72,6 @@ export default function TradePage() {
   const [tokenBalance, setTokenBalance] = useState<number | null>(null);
   const [tokenDecimals, setTokenDecimals] = useState<number | null>(null);
   const [estimatedSellSol, setEstimatedSellSol] = useState<string | null>(null);
-  const [phantomDiagnostic, setPhantomDiagnostic] =
-    useState<PhantomDiagnostic | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle", message: "Load the last Kodiak launch or paste a Devnet mint." });
 
   const normalizedMint = mintText.trim();
@@ -180,7 +123,6 @@ export default function TradePage() {
       if (!launch.mint) throw new Error("The saved launch does not contain a mint address.");
       setMintText(launch.mint); setTokenName(launch.name ?? ""); setTokenSymbol(launch.symbol ?? "");
       setPoolIdText(""); setEstimatedTokens(null); setEstimatedSellSol(null); setSellTokens("");
-      setPhantomDiagnostic(null);
       setStatus({ kind: "idle", message: "Saved Kodiak launch loaded. Now load its bonding curve." });
     } catch (error) {
       setStatus({ kind: "error", message: error instanceof Error ? error.message : "The saved launch could not be read." });
@@ -234,7 +176,6 @@ export default function TradePage() {
     if (!Number.isSafeInteger(lamports) || lamports <= 0) { setStatus({ kind: "error", message: "The SOL amount could not be converted to lamports." }); return; }
     try {
       setEstimatedTokens(null);
-      setPhantomDiagnostic(null);
       setStatus({ kind: "working", message: "Loading the live curve and calculating the purchase..." });
       const mintA = new PublicKey(normalizedMint);
       const poolId = getPdaLaunchpadPoolId(DEVNET_LAUNCHPAD_PROGRAM_ID, mintA, NATIVE_MINT).publicKey;
@@ -256,17 +197,11 @@ export default function TradePage() {
         buyAmount: new BN(lamports),
       });
       setEstimatedTokens(extInfo.decimalOutAmount.toString()); setPoolIdText(poolId.toBase58());
-      const buyDiagnostic = inspectTransaction(transaction, "buy");
-      setPhantomDiagnostic(buyDiagnostic);
       setStatus({ kind: "working", message: "Simulating the buy before Phantom can sign..." });
       const simulation = transaction instanceof VersionedTransaction
         ? await connection.simulateTransaction(transaction, { commitment: "confirmed", replaceRecentBlockhash: true, sigVerify: false })
         : await connection.simulateTransaction(transaction);
       if (simulation.value.err) { setStatus({ kind: "error", message: `Buy simulation failed: ${JSON.stringify(simulation.value.err)}`, logs: simulation.value.logs ?? [] }); return; }
-      setPhantomDiagnostic({
-        ...buyDiagnostic,
-        kodiakSimulationPassed: true,
-      });
       setStatus({ kind: "working", message: "Simulation passed. Approve the Devnet buy in Phantom..." });
       const result = await execute({ sendAndConfirm: true });
       const signature = collectSignature(result);
@@ -292,7 +227,6 @@ export default function TradePage() {
     if (rawSellAmount.lte(new BN(0))) { setStatus({ kind: "error", message: "The token amount is too small to sell." }); return; }
     try {
       setEstimatedSellSol(null);
-      setPhantomDiagnostic(null);
       setStatus({ kind: "working", message: "Loading the live curve and calculating the sale..." });
       const mintA = new PublicKey(normalizedMint);
       const poolId = getPdaLaunchpadPoolId(DEVNET_LAUNCHPAD_PROGRAM_ID, mintA, NATIVE_MINT).publicKey;
@@ -319,17 +253,11 @@ export default function TradePage() {
       const estimatedLamports = Number(extInfo.outAmount.toString());
       if (Number.isFinite(estimatedLamports)) setEstimatedSellSol((estimatedLamports / LAMPORTS_PER_SOL).toFixed(9));
       setPoolIdText(poolId.toBase58());
-      const sellDiagnostic = inspectTransaction(transaction, "sell");
-      setPhantomDiagnostic(sellDiagnostic);
       setStatus({ kind: "working", message: "Simulating the sell before Phantom can sign..." });
       const simulation = transaction instanceof VersionedTransaction
         ? await connection.simulateTransaction(transaction, { commitment: "confirmed", replaceRecentBlockhash: true, sigVerify: false })
         : await connection.simulateTransaction(transaction);
       if (simulation.value.err) { setStatus({ kind: "error", message: `Sell simulation failed: ${JSON.stringify(simulation.value.err)}`, logs: simulation.value.logs ?? [] }); return; }
-      setPhantomDiagnostic({
-        ...sellDiagnostic,
-        kodiakSimulationPassed: true,
-      });
       setStatus({ kind: "working", message: "Simulation passed. Approve the Devnet sell in Phantom..." });
       const result = await execute({ sendAndConfirm: true });
       const signature = collectSignature(result);
@@ -369,7 +297,7 @@ export default function TradePage() {
           <button type="button" onClick={loadLastLaunch} className="mb-5 w-full rounded-2xl border border-amber-300/30 px-5 py-4 font-black text-amber-300">Load Last Kodiak Launch</button>
           <label className="block">
             <span className="mb-2 block text-sm font-bold text-zinc-300">Token mint</span>
-            <input value={mintText} onChange={(event) => { setMintText(event.target.value); setPoolIdText(""); setEstimatedTokens(null); setEstimatedSellSol(null); setSellTokens(""); setPhantomDiagnostic(null); }} placeholder="Paste a Devnet LaunchLab mint" className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 font-mono text-sm outline-none focus:border-emerald-400/50" />
+            <input value={mintText} onChange={(event) => { setMintText(event.target.value); setPoolIdText(""); setEstimatedTokens(null); setEstimatedSellSol(null); setSellTokens(""); }} placeholder="Paste a Devnet LaunchLab mint" className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 font-mono text-sm outline-none focus:border-emerald-400/50" />
           </label>
           {(tokenName || tokenSymbol) && <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4"><p className="font-black">{tokenName || "Kodiak launch"}{tokenSymbol ? ` - ${symbolLabel}` : ""}</p></div>}
           <button type="button" onClick={() => void loadPool()} disabled={status.kind === "working" || !connected || !mintIsValid} className="mt-5 w-full rounded-2xl border border-emerald-400/30 px-5 py-4 font-black text-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">Load Devnet Bonding Curve</button>
@@ -402,59 +330,6 @@ export default function TradePage() {
           {tradeMode === "sell" && estimatedSellSol && <div className="mt-4"><p className="text-zinc-500">Estimated SOL output</p><p className="mt-1 break-all text-2xl font-black text-rose-300">{estimatedSellSol} SOL</p></div>}
           <div className="mt-5"><p className="text-zinc-500">LaunchLab pool</p><p className="mt-1 break-all font-mono text-xs">{poolIdText}</p><a href={`https://explorer.solana.com/address/${poolIdText}?cluster=devnet`} target="_blank" rel="noreferrer" className="mt-3 inline-block font-black text-amber-300">View pool on Solana Explorer</a></div>
         </section>}
-
-        {phantomDiagnostic && (
-          <section className="rounded-3xl border border-sky-400/20 bg-sky-400/[0.04] p-5 text-sm">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-sky-300">
-              Phantom transaction diagnostic
-            </p>
-
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-                <p className="text-xs text-zinc-500">Required signers</p>
-                <p className="mt-1 text-xl font-black text-white">
-                  {phantomDiagnostic.requiredSignatures}
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-                <p className="text-xs text-zinc-500">Already signed</p>
-                <p className="mt-1 text-xl font-black text-white">
-                  {phantomDiagnostic.existingSignatures}
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-                <p className="text-xs text-zinc-500">Transaction size</p>
-                <p className="mt-1 text-xl font-black text-white">
-                  {phantomDiagnostic.serializedBytes} bytes
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-                <p className="text-xs text-zinc-500">Solana size limit</p>
-                <p className="mt-1 text-xl font-black text-white">
-                  {phantomDiagnostic.sizeLimitBytes} bytes
-                </p>
-              </div>
-            </div>
-
-            <p className="mt-4 text-xs leading-5 text-zinc-400">
-              Type: {phantomDiagnostic.transactionType}. Kodiak RPC simulation:{" "}
-              <span
-                className={
-                  phantomDiagnostic.kodiakSimulationPassed
-                    ? "font-black text-emerald-300"
-                    : "font-black text-amber-300"
-                }
-              >
-                {phantomDiagnostic.kodiakSimulationPassed
-                  ? "PASSED"
-                  : "NOT PASSED YET"}
-              </span>
-            </p>
-          </section>
-        )}
 
         <section className={`rounded-3xl border p-5 text-sm ${status.kind === "error" ? "border-red-400/25 bg-red-400/[0.06] text-red-100" : status.kind === "success" ? "border-emerald-400/25 bg-emerald-400/[0.06] text-emerald-100" : "border-white/10 bg-white/[0.03] text-zinc-400"}`}>
           <p className="font-black">{status.message}</p>

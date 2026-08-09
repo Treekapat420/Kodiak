@@ -53,7 +53,12 @@ function decimalToRawAmount(value: string, decimals: number): BN {
 
 export default function TradePage() {
   const { connection } = useConnection();
-  const { connected, publicKey, signAllTransactions } = useWallet();
+  const {
+    connected,
+    publicKey,
+    signTransaction,
+    signAllTransactions,
+  } = useWallet();
 
   const [mintText, setMintText] = useState("");
   const [tokenName, setTokenName] = useState("");
@@ -126,12 +131,12 @@ export default function TradePage() {
 
   const loadPool = async () => {
     if (!mintIsValid) { setStatus({ kind: "error", message: "Enter a valid Solana token mint." }); return; }
-    if (!publicKey || !signAllTransactions) { setStatus({ kind: "error", message: "Connect Phantom in Devnet mode first." }); return; }
+    if (!publicKey || !signTransaction || !signAllTransactions) { setStatus({ kind: "error", message: "Connect Phantom in Devnet mode first." }); return; }
     try {
       setStatus({ kind: "working", message: "Loading the Raydium LaunchLab pool from Devnet..." });
       const mintA = new PublicKey(normalizedMint);
       const poolId = getPdaLaunchpadPoolId(DEVNET_LAUNCHPAD_PROGRAM_ID, mintA, NATIVE_MINT).publicKey;
-      const raydium = await loadDevnetRaydium({ connection, owner: publicKey, signAllTransactions });
+      const raydium = await loadDevnetRaydium({ connection, owner: publicKey, signTransaction, signAllTransactions });
       await raydium.launchpad.getRpcPoolInfo({ poolId });
       setPoolIdText(poolId.toBase58());
       setStatus({ kind: "success", message: "LaunchLab bonding-curve pool loaded from Devnet." });
@@ -163,7 +168,7 @@ export default function TradePage() {
   }
 
   const buyToken = async () => {
-    if (!publicKey || !signAllTransactions) { setStatus({ kind: "error", message: "Connect Phantom in Devnet mode first." }); return; }
+    if (!publicKey || !signTransaction || !signAllTransactions) { setStatus({ kind: "error", message: "Connect Phantom in Devnet mode first." }); return; }
     if (!mintIsValid) { setStatus({ kind: "error", message: "Enter or load a valid Devnet mint first." }); return; }
     const solNumber = Number(buySol);
     if (!Number.isFinite(solNumber) || solNumber <= 0 || solNumber > 5) { setStatus({ kind: "error", message: "Enter a Devnet SOL amount greater than 0 and no more than 5." }); return; }
@@ -174,7 +179,7 @@ export default function TradePage() {
       setStatus({ kind: "working", message: "Loading the live curve and calculating the purchase..." });
       const mintA = new PublicKey(normalizedMint);
       const poolId = getPdaLaunchpadPoolId(DEVNET_LAUNCHPAD_PROGRAM_ID, mintA, NATIVE_MINT).publicKey;
-      const raydium = await loadDevnetRaydium({ connection, owner: publicKey, signAllTransactions });
+      const raydium = await loadDevnetRaydium({ connection, owner: publicKey, signTransaction, signAllTransactions });
       const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
       const platformAccount = await connection.getAccountInfo(poolInfo.platformId, "confirmed");
       if (!platformAccount) throw new Error("The LaunchLab PlatformConfig account was not found on Devnet.");
@@ -210,7 +215,7 @@ export default function TradePage() {
   };
 
   const sellToken = async () => {
-    if (!publicKey || !signAllTransactions) { setStatus({ kind: "error", message: "Connect Phantom in Devnet mode first." }); return; }
+    if (!publicKey || !signTransaction || !signAllTransactions) { setStatus({ kind: "error", message: "Connect Phantom in Devnet mode first." }); return; }
     if (!mintIsValid) { setStatus({ kind: "error", message: "Enter or load a valid Devnet mint first." }); return; }
     if (tokenDecimals === null || tokenBalance === null) { setStatus({ kind: "error", message: "Kodiak could not read this wallet's token balance yet." }); return; }
     const sellNumber = Number(sellTokens);
@@ -225,7 +230,7 @@ export default function TradePage() {
       setStatus({ kind: "working", message: "Loading the live curve and calculating the sale..." });
       const mintA = new PublicKey(normalizedMint);
       const poolId = getPdaLaunchpadPoolId(DEVNET_LAUNCHPAD_PROGRAM_ID, mintA, NATIVE_MINT).publicKey;
-      const raydium = await loadDevnetRaydium({ connection, owner: publicKey, signAllTransactions });
+      const raydium = await loadDevnetRaydium({ connection, owner: publicKey, signTransaction, signAllTransactions });
       const poolInfo = await raydium.launchpad.getRpcPoolInfo({ poolId });
       const platformAccount = await connection.getAccountInfo(poolInfo.platformId, "confirmed");
       if (!platformAccount) throw new Error("The LaunchLab PlatformConfig account was not found on Devnet.");

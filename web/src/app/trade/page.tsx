@@ -12,11 +12,18 @@ import { NATIVE_MINT } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
 import {
-  DEVNET_LAUNCHPAD_PROGRAM_ID,
-  loadDevnetRaydium,
+  KODIAK_LAUNCHPAD_PROGRAM_ID,
+  loadKodiakRaydium,
 } from "@/lib/raydium/devnet";
+import {
+  KODIAK_NETWORK,
+  kodiakExplorerAddressUrl,
+  kodiakExplorerTransactionUrl,
+  kodiakNetworkLabel,
+} from "@/lib/solana/network";
 
 type SavedLaunch = {
+  network?: string;
   mint?: string;
   name?: string;
   symbol?: string;
@@ -30,6 +37,10 @@ type Status =
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const TRADE_SLIPPAGE = new BN(100);
+const NETWORK_LABEL = kodiakNetworkLabel();
+
+const lastLaunchStorageKey =
+  `kodiak-last-${KODIAK_NETWORK}-launch`;
 
 function collectSignature(value: unknown): string | undefined {
   if (typeof value === "string" && value.length >= 64) return value;
@@ -119,7 +130,7 @@ export default function TradePage() {
   const [status, setStatus] = useState<Status>({
     kind: "idle",
     message:
-      "Load the last Kodiak launch or paste a Devnet mint.",
+      `Load the last Kodiak launch or paste a ${NETWORK_LABEL} mint.`,
   });
 
   const normalizedMint = mintText.trim();
@@ -223,20 +234,29 @@ export default function TradePage() {
 
   const loadLastLaunch = () => {
     const raw = window.localStorage.getItem(
-      "kodiak-last-devnet-launch",
+      lastLaunchStorageKey,
     );
 
     if (!raw) {
       setStatus({
         kind: "error",
         message:
-          "No saved Kodiak Devnet launch was found in this Phantom browser.",
+          `No saved Kodiak ${NETWORK_LABEL} launch was found in this browser.`,
       });
       return;
     }
 
     try {
       const launch = JSON.parse(raw) as SavedLaunch;
+
+      if (
+        launch.network &&
+        launch.network !== KODIAK_NETWORK
+      ) {
+        throw new Error(
+          `The saved launch belongs to ${launch.network}, not ${KODIAK_NETWORK}.`,
+        );
+      }
 
       if (!launch.mint) {
         throw new Error(
@@ -284,7 +304,8 @@ export default function TradePage() {
     ) {
       setStatus({
         kind: "error",
-        message: "Connect Phantom in Devnet mode first.",
+        message:
+          `Connect a wallet on ${NETWORK_LABEL} first.`,
       });
       return;
     }
@@ -293,18 +314,18 @@ export default function TradePage() {
       setStatus({
         kind: "working",
         message:
-          "Loading the Raydium LaunchLab pool from Devnet...",
+          `Loading the Raydium LaunchLab pool from ${NETWORK_LABEL}...`,
       });
 
       const mintA = new PublicKey(normalizedMint);
 
       const poolId = getPdaLaunchpadPoolId(
-        DEVNET_LAUNCHPAD_PROGRAM_ID,
+        KODIAK_LAUNCHPAD_PROGRAM_ID,
         mintA,
         NATIVE_MINT,
       ).publicKey;
 
-      const raydium = await loadDevnetRaydium({
+      const raydium = await loadKodiakRaydium({
         connection,
         owner: publicKey,
         signTransaction,
@@ -318,7 +339,7 @@ export default function TradePage() {
       setStatus({
         kind: "success",
         message:
-          "LaunchLab bonding-curve pool loaded from Devnet.",
+          `LaunchLab bonding-curve pool loaded from ${NETWORK_LABEL}.`,
       });
     } catch (error) {
       setStatus({
@@ -401,7 +422,8 @@ export default function TradePage() {
     ) {
       setStatus({
         kind: "error",
-        message: "Connect Phantom in Devnet mode first.",
+        message:
+          `Connect a wallet on ${NETWORK_LABEL} first.`,
       });
       return;
     }
@@ -410,7 +432,7 @@ export default function TradePage() {
       setStatus({
         kind: "error",
         message:
-          "Enter or load a valid Devnet mint first.",
+          `Enter or load a valid ${NETWORK_LABEL} mint first.`,
       });
       return;
     }
@@ -425,7 +447,7 @@ export default function TradePage() {
       setStatus({
         kind: "error",
         message:
-          "Enter a Devnet SOL amount greater than 0 and no more than 5.",
+          `Enter a ${NETWORK_LABEL} SOL amount greater than 0 and no more than 5.`,
       });
       return;
     }
@@ -458,12 +480,12 @@ export default function TradePage() {
       const mintA = new PublicKey(normalizedMint);
 
       const poolId = getPdaLaunchpadPoolId(
-        DEVNET_LAUNCHPAD_PROGRAM_ID,
+        KODIAK_LAUNCHPAD_PROGRAM_ID,
         mintA,
         NATIVE_MINT,
       ).publicKey;
 
-      const raydium = await loadDevnetRaydium({
+      const raydium = await loadKodiakRaydium({
         connection,
         owner: publicKey,
         signTransaction,
@@ -483,7 +505,7 @@ export default function TradePage() {
 
       if (!platformAccount) {
         throw new Error(
-          "The LaunchLab PlatformConfig account was not found on Devnet.",
+          `The LaunchLab PlatformConfig account was not found on ${NETWORK_LABEL}.`,
         );
       }
 
@@ -499,7 +521,7 @@ export default function TradePage() {
         extInfo,
         execute,
       } = await raydium.launchpad.buyToken({
-        programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
+        programId: KODIAK_LAUNCHPAD_PROGRAM_ID,
         mintA,
         mintAProgram: new PublicKey(
           mintInfo.programId,
@@ -520,7 +542,7 @@ export default function TradePage() {
       setStatus({
         kind: "working",
         message:
-          "Simulating the buy before Phantom can sign...",
+          "Simulating the buy before the wallet can sign...",
       });
 
       const simulation =
@@ -551,7 +573,7 @@ export default function TradePage() {
       setStatus({
         kind: "working",
         message:
-          "Simulation passed. Approve the Devnet buy in Phantom...",
+          `Simulation passed. Approve the ${NETWORK_LABEL} buy in your wallet...`,
       });
 
       const result = await execute({
@@ -582,8 +604,8 @@ export default function TradePage() {
       setStatus({
         kind: "success",
         message: recorded
-          ? `${buySol} Devnet SOL purchase confirmed and added to the chart.`
-          : `${buySol} Devnet SOL purchase confirmed. Chart indexing is still pending.`,
+          ? `${buySol} ${NETWORK_LABEL} SOL purchase confirmed and added to the chart.`
+          : `${buySol} ${NETWORK_LABEL} SOL purchase confirmed. Chart indexing is still pending.`,
         signature,
       });
     } catch (error) {
@@ -592,7 +614,7 @@ export default function TradePage() {
         message:
           error instanceof Error
             ? error.message
-            : "The Devnet purchase failed.",
+            : `The ${NETWORK_LABEL} purchase failed.`,
         logs: extractLogs(error),
       });
     }
@@ -606,7 +628,8 @@ export default function TradePage() {
     ) {
       setStatus({
         kind: "error",
-        message: "Connect Phantom in Devnet mode first.",
+        message:
+          `Connect a wallet on ${NETWORK_LABEL} first.`,
       });
       return;
     }
@@ -615,7 +638,7 @@ export default function TradePage() {
       setStatus({
         kind: "error",
         message:
-          "Enter or load a valid Devnet mint first.",
+          `Enter or load a valid ${NETWORK_LABEL} mint first.`,
       });
       return;
     }
@@ -694,12 +717,12 @@ export default function TradePage() {
       const mintA = new PublicKey(normalizedMint);
 
       const poolId = getPdaLaunchpadPoolId(
-        DEVNET_LAUNCHPAD_PROGRAM_ID,
+        KODIAK_LAUNCHPAD_PROGRAM_ID,
         mintA,
         NATIVE_MINT,
       ).publicKey;
 
-      const raydium = await loadDevnetRaydium({
+      const raydium = await loadKodiakRaydium({
         connection,
         owner: publicKey,
         signTransaction,
@@ -719,7 +742,7 @@ export default function TradePage() {
 
       if (!platformAccount) {
         throw new Error(
-          "The LaunchLab PlatformConfig account was not found on Devnet.",
+          `The LaunchLab PlatformConfig account was not found on ${NETWORK_LABEL}.`,
         );
       }
 
@@ -745,7 +768,7 @@ export default function TradePage() {
         extInfo,
         execute,
       } = await raydium.launchpad.sellToken({
-        programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
+        programId: KODIAK_LAUNCHPAD_PROGRAM_ID,
         mintA,
         mintAProgram: new PublicKey(
           mintInfo.programId,
@@ -777,7 +800,7 @@ export default function TradePage() {
       setStatus({
         kind: "working",
         message:
-          "Simulating the sell before Phantom can sign...",
+          "Simulating the sell before the wallet can sign...",
       });
 
       const simulation =
@@ -808,7 +831,7 @@ export default function TradePage() {
       setStatus({
         kind: "working",
         message:
-          "Simulation passed. Approve the Devnet sell in Phantom...",
+          `Simulation passed. Approve the ${NETWORK_LABEL} sell in your wallet...`,
       });
 
       const result = await execute({
@@ -858,7 +881,7 @@ export default function TradePage() {
         message:
           error instanceof Error
             ? error.message
-            : "The Devnet sale failed.",
+            : `The ${NETWORK_LABEL} sale failed.`,
         logs: extractLogs(error),
       });
     }
@@ -893,14 +916,13 @@ export default function TradePage() {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-sm font-black uppercase tracking-[0.24em] text-emerald-300">
-                Kodiak Devnet
+                Kodiak {NETWORK_LABEL}
               </p>
               <h1 className="mt-2 text-4xl font-black">
                 Bonding Curve Trade
               </h1>
               <p className="mt-3 max-w-xl text-zinc-400">
-                Test real Raydium LaunchLab buys and
-                sells before Mainnet.
+                Trade on Raydium LaunchLab through Kodiak on {NETWORK_LABEL}.
               </p>
             </div>
 
@@ -931,7 +953,7 @@ export default function TradePage() {
                 setEstimatedSellSol(null);
                 setSellTokens("");
               }}
-              placeholder="Paste a Devnet LaunchLab mint"
+              placeholder={`Paste a ${NETWORK_LABEL} LaunchLab mint`}
               className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 font-mono text-sm outline-none focus:border-emerald-400/50"
             />
           </label>
@@ -957,7 +979,7 @@ export default function TradePage() {
             }
             className="mt-5 w-full rounded-2xl border border-emerald-400/30 px-5 py-4 font-black text-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Load Devnet Bonding Curve
+            Load {NETWORK_LABEL} Bonding Curve
           </button>
         </section>
 
@@ -992,7 +1014,7 @@ export default function TradePage() {
             <>
               <div className="flex items-center justify-between gap-4">
                 <h2 className="text-2xl font-black">
-                  Buy with Devnet SOL
+                  Buy with {NETWORK_LABEL} SOL
                 </h2>
 
                 <p className="text-sm text-zinc-400">
@@ -1034,8 +1056,7 @@ export default function TradePage() {
               </div>
 
               <p className="mt-4 text-xs leading-5 text-zinc-500">
-                Slippage is fixed at 1% for this
-                Devnet test.
+                Slippage is fixed at 1%.
               </p>
 
               <button
@@ -1049,7 +1070,7 @@ export default function TradePage() {
                 className="mt-5 w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {status.kind === "working"
-                  ? "Preparing Devnet buy..."
+                  ? `Preparing ${NETWORK_LABEL} buy...`
                   : "Buy on Bonding Curve"}
               </button>
             </>
@@ -1142,7 +1163,7 @@ export default function TradePage() {
                 className="mt-5 w-full rounded-2xl bg-rose-400 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {status.kind === "working"
-                  ? "Preparing Devnet sell..."
+                  ? `Preparing ${NETWORK_LABEL} sell...`
                   : "Sell on Bonding Curve"}
               </button>
             </>
@@ -1187,7 +1208,7 @@ export default function TradePage() {
                 {poolIdText}
               </p>
               <a
-                href={`https://explorer.solana.com/address/${poolIdText}?cluster=devnet`}
+                href={kodiakExplorerAddressUrl(poolIdText)}
                 target="_blank"
                 rel="noreferrer"
                 className="mt-3 inline-block font-black text-amber-300"
@@ -1214,7 +1235,9 @@ export default function TradePage() {
           {status.kind === "success" &&
             status.signature && (
               <a
-                href={`https://explorer.solana.com/tx/${status.signature}?cluster=devnet`}
+                href={kodiakExplorerTransactionUrl(
+                  status.signature,
+                )}
                 target="_blank"
                 rel="noreferrer"
                 className="mt-3 inline-block font-black text-amber-300"

@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo } from "react";
-import { clusterApiUrl } from "@solana/web3.js";
 import {
   ConnectionProvider,
   WalletProvider,
@@ -11,13 +10,13 @@ import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
 import { SolflareWalletAdapter } from "@solana/wallet-adapter-solflare";
 import { CoinbaseWalletAdapter } from "@solana/wallet-adapter-coinbase";
 
+import { KODIAK_RPC_URL } from "@/lib/solana/network";
+
 export function SolanaProvider({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const endpoint = useMemo(
-    () =>
-      process.env.NEXT_PUBLIC_SOLANA_RPC_URL?.trim() ||
-      clusterApiUrl("devnet"),
+    () => KODIAK_RPC_URL,
     [],
   );
 
@@ -33,7 +32,9 @@ export function SolanaProvider({
   return (
     <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={wallets} autoConnect>
-        <WalletModalProvider>{children}</WalletModalProvider>
+        <WalletModalProvider>
+          {children}
+        </WalletModalProvider>
       </WalletProvider>
     </ConnectionProvider>
   );

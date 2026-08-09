@@ -398,18 +398,17 @@ export default function TokenPage() {
 
               <div className="mt-5 grid gap-3">
                 <Link
-                  href="/creator"
-                  className="rounded-xl border border-white/10 px-4 py-3 text-center text-sm font-black"
+                  href={`/creator/${launch.creator}`}
+                  className="rounded-xl bg-amber-300 px-4 py-3 text-center text-sm font-black text-black"
                 >
-                  Creator setup
+                  View public creator profile
                 </Link>
 
                 <Link
-                  href="/dashboard"
-                  className="rounded-xl border border-white/10 px-4 py-3 text-center text-sm font-black text-emerald-300"
+                  href="/creator"
+                  className="rounded-xl border border-white/10 px-4 py-3 text-center text-sm font-black text-zinc-300"
                 >
-                  Creator command
-                  center
+                  Creator setup
                 </Link>
               </div>
             </section>

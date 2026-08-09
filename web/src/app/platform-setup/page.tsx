@@ -30,7 +30,13 @@ const BURN_LP_SCALE = 900_000;
 
 export default function PlatformSetupPage() {
   const { connection } = useConnection();
-  const { connected, publicKey, signAllTransactions } = useWallet();
+  const {
+    connected,
+    publicKey,
+    signTransaction,
+    signAllTransactions,
+  } = useWallet();
+
   const [cpConfigId, setCpConfigId] = useState("");
   const [configOptions, setConfigOptions] = useState<string[]>([]);
   const [confirmed, setConfirmed] = useState(false);
@@ -103,6 +109,7 @@ export default function PlatformSetupPage() {
     }
 
     void loadConfigs();
+
     return () => {
       cancelled = true;
     };
@@ -120,17 +127,25 @@ export default function PlatformSetupPage() {
   const canCreate =
     connected &&
     Boolean(publicKey) &&
+    Boolean(signTransaction) &&
     Boolean(signAllTransactions) &&
     confirmed &&
     cpConfigIsValid &&
     status.kind !== "working";
 
   async function createPlatform() {
-    if (!publicKey || !signAllTransactions || !canCreate) return;
+    if (
+      !publicKey ||
+      !signTransaction ||
+      !signAllTransactions ||
+      !canCreate
+    ) {
+      return;
+    }
 
     setStatus({
       kind: "working",
-      message: "Building Kodiak PlatformConfig on Solana Devnet…",
+      message: "Building Kodiak PlatformConfig on Solana Devnet...",
     });
 
     try {
@@ -147,6 +162,7 @@ export default function PlatformSetupPage() {
       const raydium = await loadDevnetRaydium({
         connection,
         owner: publicKey,
+        signTransaction,
         signAllTransactions,
       });
 
@@ -174,16 +190,17 @@ export default function PlatformSetupPage() {
 
       setStatus({
         kind: "working",
-        message: "Simulating the Devnet transaction before opening Phantom…",
+        message: "Simulating the Devnet transaction before opening Phantom...",
       });
 
-      const simulation = transaction instanceof VersionedTransaction
-        ? await connection.simulateTransaction(transaction, {
-            commitment: "confirmed",
-            replaceRecentBlockhash: true,
-            sigVerify: false,
-          })
-        : await connection.simulateTransaction(transaction);
+      const simulation =
+        transaction instanceof VersionedTransaction
+          ? await connection.simulateTransaction(transaction, {
+              commitment: "confirmed",
+              replaceRecentBlockhash: true,
+              sigVerify: false,
+            })
+          : await connection.simulateTransaction(transaction);
 
       const simulationLogs = simulation.value.logs ?? [];
 
@@ -203,12 +220,17 @@ export default function PlatformSetupPage() {
 
       setStatus({
         kind: "working",
-        message: "Simulation passed. Approve the Devnet transaction in Phantom…",
+        message:
+          "Simulation passed. Approve the Devnet transaction in Phantom...",
       });
 
       const result = await execute({ sendAndConfirm: true });
       const platformId = extInfo.platformId.toBase58();
-      window.localStorage.setItem("kodiak-devnet-platform-id", platformId);
+
+      window.localStorage.setItem(
+        "kodiak-devnet-platform-id",
+        platformId,
+      );
 
       const signature =
         typeof result === "string"
@@ -228,20 +250,25 @@ export default function PlatformSetupPage() {
       });
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Platform creation failed.";
+        error instanceof Error
+          ? error.message
+          : "Platform creation failed.";
 
       const possibleLogs =
         typeof error === "object" &&
         error !== null &&
         "logs" in error &&
         Array.isArray(error.logs)
-          ? error.logs.filter((item): item is string => typeof item === "string")
+          ? error.logs.filter(
+              (item): item is string => typeof item === "string",
+            )
           : undefined;
 
       setStatus({
         kind: "error",
         message:
-          message.includes("already") || message.includes("initialized")
+          message.includes("already") ||
+          message.includes("initialized")
             ? `${message} This wallet may already own a platform configuration.`
             : message,
         logs: possibleLogs,
@@ -265,6 +292,7 @@ export default function PlatformSetupPage() {
               using test-network SOL only.
             </p>
           </div>
+
           <Link
             href="/dashboard"
             className="h-fit w-fit rounded-xl border border-white/10 px-4 py-2 text-sm font-bold"
@@ -295,10 +323,11 @@ export default function PlatformSetupPage() {
                   Devnet balance:{" "}
                   <span className="font-bold text-zinc-100">
                     {devnetBalance === null
-                      ? "Checking…"
+                      ? "Checking..."
                       : `${devnetBalance.toFixed(4)} SOL`}
                   </span>
                 </p>
+
                 {devnetBalance !== null && devnetBalance < 0.01 && (
                   <p className="mt-2 text-sm font-bold text-amber-300">
                     This wallet may need more Devnet SOL to create the
@@ -311,20 +340,27 @@ export default function PlatformSetupPage() {
                 <span className="mb-2 block text-sm font-bold text-zinc-300">
                   Devnet CPMM configuration
                 </span>
+
                 {configOptions.length > 0 ? (
                   <select
                     value={cpConfigId}
-                    onChange={(event) => setCpConfigId(event.target.value)}
+                    onChange={(event) =>
+                      setCpConfigId(event.target.value)
+                    }
                     className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-4 text-sm"
                   >
                     {configOptions.map((id) => (
-                      <option key={id} value={id}>{id}</option>
+                      <option key={id} value={id}>
+                        {id}
+                      </option>
                     ))}
                   </select>
                 ) : (
                   <input
                     value={cpConfigId}
-                    onChange={(event) => setCpConfigId(event.target.value)}
+                    onChange={(event) =>
+                      setCpConfigId(event.target.value)
+                    }
                     placeholder="Paste a Devnet CPMM config ID"
                     className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-4 text-sm"
                   />
@@ -341,7 +377,9 @@ export default function PlatformSetupPage() {
                 <input
                   type="checkbox"
                   checked={confirmed}
-                  onChange={(event) => setConfirmed(event.target.checked)}
+                  onChange={(event) =>
+                    setConfirmed(event.target.checked)
+                  }
                   className="mt-1 h-5 w-5 accent-emerald-400"
                 />
                 <span className="text-sm leading-6 text-zinc-400">
@@ -362,7 +400,7 @@ export default function PlatformSetupPage() {
                   className="w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
                 >
                   {status.kind === "working"
-                    ? "Waiting for transaction…"
+                    ? "Waiting for transaction..."
                     : "Create Kodiak Devnet Platform"}
                 </button>
               )}
@@ -372,6 +410,7 @@ export default function PlatformSetupPage() {
           <aside className="space-y-5">
             <section className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-6">
               <h2 className="text-xl font-black">On-chain settings</h2>
+
               <div className="mt-5 space-y-4 text-sm">
                 {[
                   ["Kodiak platform fee", "0.60%"],
@@ -404,7 +443,10 @@ export default function PlatformSetupPage() {
               <p className="text-sm font-black uppercase tracking-[0.16em] text-zinc-500">
                 Status
               </p>
-              <p className="mt-3 break-words font-bold">{status.message}</p>
+
+              <p className="mt-3 break-words font-bold">
+                {status.message}
+              </p>
 
               {status.kind === "error" &&
                 status.logs &&
@@ -421,10 +463,13 @@ export default function PlatformSetupPage() {
 
               {status.kind === "success" && (
                 <div className="mt-5">
-                  <p className="text-xs text-zinc-500">PlatformConfig address</p>
+                  <p className="text-xs text-zinc-500">
+                    PlatformConfig address
+                  </p>
                   <p className="mt-2 break-all rounded-xl bg-black/30 p-3 font-mono text-xs text-emerald-300">
                     {status.platformId}
                   </p>
+
                   {status.signature && (
                     <a
                       href={`https://explorer.solana.com/tx/${status.signature}?cluster=devnet`}

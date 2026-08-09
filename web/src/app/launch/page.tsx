@@ -381,7 +381,7 @@ export default function LaunchPage() {
       const raydium = await loadKodiakRaydium({
         connection,
         owner: publicKey,
-        signTransaction, signTransaction!,
+        signTransaction: signTransaction!,
         signAllTransactions,
       });
 

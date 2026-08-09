@@ -1,7 +1,6 @@
 import { getPdaPlatformVault } from "@raydium-io/raydium-sdk-v2";
 import { NATIVE_MINT } from "@solana/spl-token";
 import {
-  clusterApiUrl,
   Connection,
   LAMPORTS_PER_SOL,
   PublicKey,
@@ -12,38 +11,44 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { isKodiakAdminWallet } from "@/lib/admin";
 import { DEVNET_LAUNCHPAD_PROGRAM_ID } from "@/lib/raydium/devnet";
+import {
+  KODIAK_IS_DEVNET,
+  KODIAK_NETWORK,
+  KODIAK_RPC_URL,
+} from "@/lib/solana/network";
 import { getRedis } from "@/lib/server/redis";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const CONFIG_KEY = "kodiak:config:v1";
+const CONFIG_KEY =
+  `kodiak:config:v2:${KODIAK_NETWORK}`;
 
 const CLAIMED_LAMPORTS_KEY =
-  "kodiak:admin:revenue:claimed-lamports:v2";
+  `kodiak:admin:revenue:claimed-lamports:v3:${KODIAK_NETWORK}`;
 
 const CLAIM_COUNT_KEY =
-  "kodiak:admin:revenue:claim-count:v2";
+  `kodiak:admin:revenue:claim-count:v3:${KODIAK_NETWORK}`;
 
 const LAST_SIGNATURE_KEY =
-  "kodiak:admin:revenue:last-signature:v2";
+  `kodiak:admin:revenue:last-signature:v3:${KODIAK_NETWORK}`;
 
 const UPDATED_AT_KEY =
-  "kodiak:admin:revenue:updated-at:v2";
+  `kodiak:admin:revenue:updated-at:v3:${KODIAK_NETWORK}`;
 
 const CLAIM_SIGNATURE_PREFIX =
-  "kodiak:admin:revenue:claim-signature:v2:";
+  `kodiak:admin:revenue:claim-signature:v3:${KODIAK_NETWORK}:`;
 
 const SUCCESS_FUND_TRANSFERRED_LAMPORTS_KEY =
-  "kodiak:admin:revenue:success-fund-transferred-lamports:v1";
+  `kodiak:admin:revenue:success-fund-transferred-lamports:v2:${KODIAK_NETWORK}`;
 
 const SUCCESS_FUND_LAST_TRANSFER_SIGNATURE_KEY =
-  "kodiak:admin:revenue:success-fund-last-transfer-signature:v1";
+  `kodiak:admin:revenue:success-fund-last-transfer-signature:v2:${KODIAK_NETWORK}`;
 
 const SUCCESS_FUND_TRANSFER_SIGNATURE_PREFIX =
-  "kodiak:admin:revenue:success-fund-transfer-signature:v1:";
+  `kodiak:admin:revenue:success-fund-transfer-signature:v2:${KODIAK_NETWORK}:`;
 
-const DEFAULT_PLATFORM_ID =
+const DEVNET_PLATFORM_ID =
   "D33yYxh4JRtdeyLq7sFD8MzSjdtUa3uNFsSk39QHY8yT";
 
 const CREATOR_SUCCESS_FUND_WALLET =
@@ -52,13 +57,36 @@ const CREATOR_SUCCESS_FUND_WALLET =
 const CREATOR_SUCCESS_FUND_BPS = 500;
 const BPS_DENOMINATOR = 10_000;
 
+function networkLabel() {
+  return KODIAK_IS_DEVNET ? "Devnet" : "Mainnet";
+}
+
+function assertRevenueVerificationReady() {
+  if (!KODIAK_IS_DEVNET) {
+    throw new Error(
+      "Kodiak Mainnet revenue verification is not enabled yet. " +
+        "The shared network layer is Mainnet-aware, but the production " +
+        "LaunchLab program and PlatformConfig must be verified before " +
+        "Mainnet revenue claims can be recorded.",
+    );
+  }
+}
+
+function createVerificationConnection() {
+  return new Connection(
+    KODIAK_RPC_URL,
+    "confirmed",
+  );
+}
+
 function solFromLamports(lamports: number): number {
   return lamports / LAMPORTS_PER_SOL;
 }
 
 function splitRevenueLamports(totalLamports: number) {
   const creatorSuccessFundLamports = Math.floor(
-    (totalLamports * CREATOR_SUCCESS_FUND_BPS) / BPS_DENOMINATOR,
+    (totalLamports * CREATOR_SUCCESS_FUND_BPS) /
+      BPS_DENOMINATOR,
   );
 
   const kodiakOperatingLamports =
@@ -66,9 +94,11 @@ function splitRevenueLamports(totalLamports: number) {
 
   return {
     creatorSuccessFundLamports,
-    creatorSuccessFundSol: solFromLamports(creatorSuccessFundLamports),
+    creatorSuccessFundSol:
+      solFromLamports(creatorSuccessFundLamports),
     kodiakOperatingLamports,
-    kodiakOperatingSol: solFromLamports(kodiakOperatingLamports),
+    kodiakOperatingSol:
+      solFromLamports(kodiakOperatingLamports),
   };
 }
 
@@ -80,12 +110,34 @@ async function getPlatformId(): Promise<PublicKey> {
       CONFIG_KEY,
     );
 
-  const platformId =
+  const configuredPlatformId =
     typeof config?.platformId === "string"
-      ? config.platformId
-      : DEFAULT_PLATFORM_ID;
+      ? config.platformId.trim()
+      : "";
 
-  return new PublicKey(platformId);
+  if (configuredPlatformId) {
+    return new PublicKey(configuredPlatformId);
+  }
+
+  if (KODIAK_IS_DEVNET) {
+    return new PublicKey(
+      process.env.KODIAK_DEVNET_PLATFORM_ID?.trim() ||
+        process.env.NEXT_PUBLIC_KODIAK_DEVNET_PLATFORM_ID?.trim() ||
+        DEVNET_PLATFORM_ID,
+    );
+  }
+
+  const mainnetPlatformId =
+    process.env.KODIAK_MAINNET_PLATFORM_ID?.trim() ||
+    process.env.NEXT_PUBLIC_KODIAK_MAINNET_PLATFORM_ID?.trim();
+
+  if (!mainnetPlatformId) {
+    throw new Error(
+      "Kodiak Mainnet PlatformConfig is not configured.",
+    );
+  }
+
+  return new PublicKey(mainnetPlatformId);
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -99,7 +151,11 @@ async function getTransactionWithRetry(
   const attempts = 12;
   const delayMs = 1250;
 
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  for (
+    let attempt = 1;
+    attempt <= attempts;
+    attempt += 1
+  ) {
     const transaction =
       await connection.getTransaction(
         signature,
@@ -128,7 +184,11 @@ async function getParsedTransactionWithRetry(
   const attempts = 12;
   const delayMs = 1250;
 
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  for (
+    let attempt = 1;
+    attempt <= attempts;
+    attempt += 1
+  ) {
     const transaction =
       await connection.getParsedTransaction(
         signature,
@@ -202,6 +262,8 @@ async function buildRevenueSummary() {
     );
 
   return {
+    network: KODIAK_NETWORK,
+
     claimedLamports,
     claimedSol:
       solFromLamports(claimedLamports),
@@ -266,6 +328,8 @@ export async function POST(
   let signature = "";
 
   try {
+    assertRevenueVerificationReady();
+
     const body = (await request.json()) as {
       signature?: string;
     };
@@ -318,10 +382,8 @@ export async function POST(
     }
 
     try {
-      const connection = new Connection(
-        clusterApiUrl("devnet"),
-        "confirmed",
-      );
+      const connection =
+        createVerificationConnection();
 
       const transaction =
         await getTransactionWithRetry(
@@ -331,7 +393,7 @@ export async function POST(
 
       if (!transaction) {
         throw new Error(
-          "The Devnet transaction is confirmed by the wallet but has not reached Kodiak's verification RPC yet. Please wait a moment and try again.",
+          `The ${networkLabel()} transaction is confirmed by the wallet but has not reached Kodiak's verification RPC yet. Please wait a moment and try again.`,
         );
       }
 
@@ -340,7 +402,7 @@ export async function POST(
         transaction.meta.err
       ) {
         throw new Error(
-          "The transaction was not a successful Devnet transaction.",
+          `The transaction was not a successful ${networkLabel()} transaction.`,
         );
       }
 
@@ -518,6 +580,7 @@ export async function POST(
 
       return NextResponse.json({
         recorded: true,
+        network: KODIAK_NETWORK,
         signature,
 
         claimedLamports,
@@ -600,6 +663,8 @@ export async function PATCH(
   const redis = getRedis();
 
   try {
+    assertRevenueVerificationReady();
+
     const body = (await request.json()) as {
       signature?: string;
     };
@@ -649,10 +714,8 @@ export async function PATCH(
     }
 
     try {
-      const connection = new Connection(
-        clusterApiUrl("devnet"),
-        "confirmed",
-      );
+      const connection =
+        createVerificationConnection();
 
       const transaction =
         await getParsedTransactionWithRetry(
@@ -662,7 +725,7 @@ export async function PATCH(
 
       if (!transaction) {
         throw new Error(
-          "The Success Fund transfer has not reached Kodiak's Devnet verification RPC yet. Please wait a moment and try again.",
+          `The Success Fund transfer has not reached Kodiak's ${networkLabel()} verification RPC yet. Please wait a moment and try again.`,
         );
       }
 
@@ -671,7 +734,7 @@ export async function PATCH(
         transaction.meta.err
       ) {
         throw new Error(
-          "The Success Fund transfer was not a successful Devnet transaction.",
+          `The Success Fund transfer was not a successful ${networkLabel()} transaction.`,
         );
       }
 
@@ -773,6 +836,7 @@ export async function PATCH(
 
       return NextResponse.json({
         recorded: true,
+        network: KODIAK_NETWORK,
         transferSignature: signature,
         transferredLamports,
         transferredSol:

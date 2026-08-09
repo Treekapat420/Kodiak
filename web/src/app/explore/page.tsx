@@ -22,7 +22,7 @@ type Launch = {
 type Filter = "new" | "active" | "volume";
 
 function shortAddress(value: string) {
-  return `${value.slice(0, 4)}…${value.slice(-4)}`;
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
 function formatSol(value: number) {
@@ -54,7 +54,7 @@ export default function ExplorePage() {
   const [launches, setLaunches] = useState<Launch[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("new");
-  const [message, setMessage] = useState("Loading live launches…");
+  const [message, setMessage] = useState("Loading live launches...");
 
   useEffect(() => {
     let cancelled = false;

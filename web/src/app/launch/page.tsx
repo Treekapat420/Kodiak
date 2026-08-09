@@ -262,7 +262,7 @@ export default function LaunchPage() {
   };
 
   const prepareLaunchTransaction = async () => {
-    if (!publicKey || !signAllTransactions) {
+    if (!publicKey || !signTransaction || !signAllTransactions) {
       setLaunchStatus({
         kind: "error",
         message: "Connect a wallet before preparing the launch.",

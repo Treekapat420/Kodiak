@@ -4,7 +4,6 @@ import Link from "next/link";
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import BN from "bn.js";
 import {
-  DEVNET_PROGRAM_ID,
   getPdaLaunchpadConfigId,
   LaunchpadConfig,
   TxVersion,
@@ -13,7 +12,15 @@ import { Keypair, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
-import { loadDevnetRaydium } from "@/lib/raydium/devnet";
+import {
+  KODIAK_LAUNCHPAD_PROGRAM_ID,
+  loadKodiakRaydium,
+} from "@/lib/raydium/devnet";
+import {
+  KODIAK_NETWORK,
+  kodiakExplorerAddressUrl,
+  kodiakNetworkLabel,
+} from "@/lib/solana/network";
 
 type FormState = {
   name: string;
@@ -39,7 +46,15 @@ type SimulationDiagnostic = {
 };
 
 const steps = ["Project", "Branding", "Socials", "Launch", "Review"];
-const storageKey = "kodiak-launch-draft-v2";
+const NETWORK_LABEL = kodiakNetworkLabel();
+
+const storageKey =
+  KODIAK_NETWORK === "devnet"
+    ? "kodiak-launch-draft-v2"
+    : "kodiak-launch-draft-mainnet-v1";
+
+const lastLaunchStorageKey =
+  `kodiak-last-${KODIAK_NETWORK}-launch`;
 
 const initialForm: FormState = {
   name: "",
@@ -98,12 +113,7 @@ function validUrl(value: string) {
 
 export default function LaunchPage() {
   const { connection } = useConnection();
-  const {
-    connected,
-    publicKey,
-    signTransaction,
-    signAllTransactions,
-  } = useWallet();
+  const { connected, publicKey, signAllTransactions } = useWallet();
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormState>(initialForm);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
@@ -116,7 +126,7 @@ export default function LaunchPage() {
     | { kind: "working"; message: string }
     | { kind: "success"; message: string; mint: string; signatures: string[] }
     | { kind: "error"; message: string; logs?: string[] }
-  >({ kind: "idle", message: "Ready to prepare a Devnet launch." });
+  >({ kind: "idle", message: `Ready to prepare a ${NETWORK_LABEL} launch.` });
 
   useEffect(() => {
     const restoreTimer = window.setTimeout(() => {
@@ -233,7 +243,7 @@ export default function LaunchPage() {
     setSimulationDiagnostic(null);
     setLaunchStatus({
       kind: "idle",
-      message: "Ready to prepare a Devnet launch.",
+      message: `Ready to prepare a ${NETWORK_LABEL} launch.`,
     });
     setStep(0);
   };
@@ -247,10 +257,10 @@ export default function LaunchPage() {
   };
 
   const prepareLaunchTransaction = async () => {
-    if (!publicKey || !signTransaction || !signAllTransactions) {
+    if (!publicKey || !signAllTransactions) {
       setLaunchStatus({
         kind: "error",
-        message: "Connect Phantom before preparing the launch.",
+        message: "Connect a wallet before preparing the launch.",
       });
       return;
     }
@@ -264,20 +274,7 @@ export default function LaunchPage() {
       setLaunchStatus({
         kind: "error",
         message:
-          "The first Devnet engine currently requires a supply of exactly 1,000,000,000 tokens.",
-      });
-      return;
-    }
-
-    const platformIdValue = window.localStorage.getItem(
-      "kodiak-devnet-platform-id",
-    );
-
-    if (!platformIdValue) {
-      setLaunchStatus({
-        kind: "error",
-        message:
-          "Kodiak's Devnet PlatformConfig was not found in this browser. Open Platform Setup first.",
+          `The first ${NETWORK_LABEL} engine currently requires a supply of exactly 1,000,000,000 tokens.`,
       });
       return;
     }
@@ -289,7 +286,35 @@ export default function LaunchPage() {
     let passedCount = 0;
 
     try {
-      const platformId = new PublicKey(platformIdValue);
+      const configResponse = await fetch("/api/config", {
+        cache: "no-store",
+      });
+
+      const configPayload =
+        (await configResponse.json()) as {
+          platformId?: string;
+          network?: string;
+          error?: string;
+        };
+
+      if (!configResponse.ok || !configPayload.platformId) {
+        throw new Error(
+          configPayload.error ||
+            `Kodiak's ${NETWORK_LABEL} PlatformConfig is not available.`,
+        );
+      }
+
+      if (
+        configPayload.network &&
+        configPayload.network !== KODIAK_NETWORK
+      ) {
+        throw new Error(
+          `Kodiak network mismatch: the browser is using ${NETWORK_LABEL}, but /api/config returned ${configPayload.network}.`,
+        );
+      }
+
+      const platformId =
+        new PublicKey(configPayload.platformId);
 
       setLaunchStatus({
         kind: "working",
@@ -335,7 +360,7 @@ export default function LaunchPage() {
         message: "Building the Raydium LaunchLab transaction...",
       });
 
-      const programId = DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM;
+      const programId = KODIAK_LAUNCHPAD_PROGRAM_ID;
       const configId = getPdaLaunchpadConfigId(
         programId,
         NATIVE_MINT,
@@ -349,16 +374,15 @@ export default function LaunchPage() {
 
       if (!configAccount) {
         throw new Error(
-          `Raydium Devnet LaunchLab config was not found: ${configId.toBase58()}`,
+          `Raydium ${NETWORK_LABEL} LaunchLab config was not found: ${configId.toBase58()}`,
         );
       }
 
       const configInfo = LaunchpadConfig.decode(configAccount.data);
       const mintKeypair = Keypair.generate();
-      const raydium = await loadDevnetRaydium({
+      const raydium = await loadKodiakRaydium({
         connection,
         owner: publicKey,
-        signTransaction,
         signAllTransactions,
       });
 
@@ -411,7 +435,7 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "working",
-        message: `Simulating ${transactionCount} Devnet launch transaction${
+        message: `Simulating ${transactionCount} ${NETWORK_LABEL} launch transaction${
           transactionCount === 1 ? "" : "s"
         }...`,
       });
@@ -506,7 +530,7 @@ export default function LaunchPage() {
       if (uniqueSignatures.length === 0) {
         setLaunchStatus({
           kind: "working",
-          message: "Locating the confirmed launch transaction on Devnet...",
+          message: `Locating the confirmed launch transaction on ${NETWORK_LABEL}...`,
         });
 
         for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -592,8 +616,9 @@ export default function LaunchPage() {
       const createdAt = new Date().toISOString();
 
       window.localStorage.setItem(
-        "kodiak-last-devnet-launch",
+        lastLaunchStorageKey,
         JSON.stringify({
+          network: KODIAK_NETWORK,
           mint,
           signatures: uniqueSignatures,
           name: form.name,
@@ -660,7 +685,7 @@ export default function LaunchPage() {
       const walletOrLaunchError =
         error instanceof Error
           ? error.message
-          : "Unable to prepare the Devnet launch.";
+          : `Unable to prepare the ${NETWORK_LABEL} launch.`;
 
       if (kodiakSimulationPassed) {
         setSimulationDiagnostic((current) => ({
@@ -987,7 +1012,7 @@ export default function LaunchPage() {
                       className="w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {launchStatus.kind === "working"
-                        ? "Preparing Devnet launch..."
+                        ? `Preparing ${NETWORK_LABEL} launch...`
                         : "Prepare Launch Transaction"}
                     </button>
 
@@ -1065,14 +1090,14 @@ export default function LaunchPage() {
                         <div className="mt-4 space-y-3">
                           <div>
                             <p className="text-xs text-emerald-200/70">
-                              Devnet mint
+                              {NETWORK_LABEL} mint
                             </p>
                             <p className="mt-1 break-all rounded-xl bg-black/30 p-3 font-mono text-xs">
                               {launchStatus.mint}
                             </p>
                           </div>
                           <a
-                            href={`https://explorer.solana.com/address/${launchStatus.mint}?cluster=devnet`}
+                            href={kodiakExplorerAddressUrl(launchStatus.mint)}
                             target="_blank"
                             rel="noreferrer"
                             className="inline-block font-black text-amber-300"

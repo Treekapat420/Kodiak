@@ -7,7 +7,9 @@ import {
   LaunchpadPool,
 } from "@raydium-io/raydium-sdk-v2";
 
-import { DEVNET_LAUNCHPAD_PROGRAM_ID } from "@/lib/raydium/devnet";
+import {
+  KODIAK_LAUNCHPAD_PROGRAM_ID,
+} from "@/lib/raydium/devnet";
 import {
   KODIAK_IS_DEVNET,
   KODIAK_IS_MAINNET,
@@ -74,13 +76,14 @@ function getLaunchpadProgramId() {
     );
   }
 
-  return DEVNET_LAUNCHPAD_PROGRAM_ID;
+  return KODIAK_LAUNCHPAD_PROGRAM_ID;
 }
 
 function redisConfig() {
   const url =
     process.env.KV_REST_API_URL ||
     process.env.UPSTASH_REDIS_REST_URL;
+
   const token =
     process.env.KV_REST_API_TOKEN ||
     process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -131,10 +134,10 @@ async function redis<T = unknown>(
 }
 
 /*
- * Keep the existing Devnet Redis key format intact so all of the current
- * TEST18 trade history and candles remain available after this refactor.
+ * Keep the existing Devnet Redis key format intact so all current trade
+ * history and candles remain available after this refactor.
  *
- * Mainnet will naturally use a separate kodiak:mainnet:* namespace.
+ * Mainnet naturally uses a separate kodiak:mainnet:* namespace.
  */
 const tradeKey = (mint: string) =>
   `kodiak:${KODIAK_NETWORK}:trades:${mint}`;
@@ -166,6 +169,7 @@ function balanceAmount(value: {
   const raw = Number(
     value.uiTokenAmount?.amount ?? "0",
   );
+
   const decimals = Number(
     value.uiTokenAmount?.decimals ?? 0,
   );

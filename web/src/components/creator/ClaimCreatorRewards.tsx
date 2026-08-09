@@ -1,47 +1,110 @@
 "use client";
 
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { NATIVE_MINT, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import {
-  TxVersion,
-  getPdaCreatorVault,
-} from "@raydium-io/raydium-sdk-v2";
 import { useEffect, useState } from "react";
 import {
-  DEVNET_LAUNCHPAD_PROGRAM_ID,
-  loadDevnetRaydium,
+  getPdaCreatorVault,
+  TxVersion,
+} from "@raydium-io/raydium-sdk-v2";
+import {
+  NATIVE_MINT,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import {
+  useConnection,
+  useWallet,
+} from "@solana/wallet-adapter-react";
+
+import {
+  KODIAK_LAUNCHPAD_PROGRAM_ID,
+  loadKodiakRaydium,
 } from "@/lib/raydium/devnet";
+import {
+  kodiakExplorerTransactionUrl,
+  kodiakNetworkLabel,
+} from "@/lib/solana/network";
 
 type Status =
   | { kind: "idle"; message: string }
   | { kind: "working"; message: string }
-  | { kind: "success"; message: string; signature?: string }
+  | {
+      kind: "success";
+      message: string;
+      signature?: string;
+    }
   | { kind: "error"; message: string };
 
-function signatureFrom(value: unknown): string | undefined {
-  if (typeof value === "string" && value.length > 20) return value;
-  if (!value || typeof value !== "object") return undefined;
+const NETWORK_LABEL = kodiakNetworkLabel();
 
-  const record = value as Record<string, unknown>;
-
-  for (const key of ["signature", "txId", "txid", "id"]) {
-    const v = record[key];
-    if (typeof v === "string" && v.length > 20) return v;
+function signatureFrom(
+  value: unknown,
+): string | undefined {
+  if (
+    typeof value === "string" &&
+    value.length > 20
+  ) {
+    return value;
   }
 
-  if (Array.isArray(record.txIds)) {
-    const v = record.txIds.find(
-      (item) => typeof item === "string" && item.length > 20,
-    );
+  if (
+    !value ||
+    typeof value !== "object"
+  ) {
+    return undefined;
+  }
 
-    if (typeof v === "string") return v;
+  const record =
+    value as Record<
+      string,
+      unknown
+    >;
+
+  for (
+    const key of [
+      "signature",
+      "txId",
+      "txid",
+      "id",
+    ]
+  ) {
+    const candidate =
+      record[key];
+
+    if (
+      typeof candidate === "string" &&
+      candidate.length > 20
+    ) {
+      return candidate;
+    }
+  }
+
+  if (
+    Array.isArray(
+      record.txIds,
+    )
+  ) {
+    const candidate =
+      record.txIds.find(
+        (item) =>
+          typeof item ===
+            "string" &&
+          item.length > 20,
+      );
+
+    if (
+      typeof candidate ===
+      "string"
+    ) {
+      return candidate;
+    }
   }
 
   return undefined;
 }
 
 export function ClaimCreatorRewards() {
-  const { connection } = useConnection();
+  const { connection } =
+    useConnection();
+
   const {
     connected,
     publicKey,
@@ -49,56 +112,93 @@ export function ClaimCreatorRewards() {
     signAllTransactions,
   } = useWallet();
 
-  const [claimableSol, setClaimableSol] = useState<number | null>(null);
+  const [
+    claimableSol,
+    setClaimableSol,
+  ] = useState<
+    number | null
+  >(null);
 
-  const [status, setStatus] = useState<Status>({
+  const [
+    status,
+    setStatus,
+  ] = useState<Status>({
     kind: "idle",
     message:
-      "Claims use Raydium LaunchLab's real creator-fee vault on Solana Devnet.",
+      `Claims use Raydium LaunchLab's real creator-fee vault on Solana ${NETWORK_LABEL}.`,
   });
 
   async function refreshClaimableBalance() {
     if (!publicKey) {
-      setClaimableSol(null);
+      setClaimableSol(
+        null,
+      );
       return;
     }
 
     try {
-      const creatorVault = getPdaCreatorVault(
-        DEVNET_LAUNCHPAD_PROGRAM_ID,
-        publicKey,
-        NATIVE_MINT,
-      ).publicKey;
+      const creatorVault =
+        getPdaCreatorVault(
+          KODIAK_LAUNCHPAD_PROGRAM_ID,
+          publicKey,
+          NATIVE_MINT,
+        ).publicKey;
 
-      const accountInfo = await connection.getAccountInfo(
-        creatorVault,
-        "confirmed",
-      );
+      const accountInfo =
+        await connection.getAccountInfo(
+          creatorVault,
+          "confirmed",
+        );
 
       if (!accountInfo) {
-        setClaimableSol(0);
+        setClaimableSol(
+          0,
+        );
         return;
       }
 
-      const balance = await connection.getTokenAccountBalance(
-        creatorVault,
-        "confirmed",
+      const balance =
+        await connection.getTokenAccountBalance(
+          creatorVault,
+          "confirmed",
+        );
+
+      setClaimableSol(
+        Number(
+          balance.value
+            .uiAmountString ??
+            "0",
+        ),
+      );
+    } catch (error) {
+      console.error(
+        "Unable to read creator vault balance:",
+        error,
       );
 
-      setClaimableSol(Number(balance.value.uiAmountString ?? "0"));
-    } catch (error) {
-      console.error("Unable to read creator vault balance:", error);
-      setClaimableSol(null);
+      setClaimableSol(
+        null,
+      );
     }
   }
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void refreshClaimableBalance();
-    }, 0);
+    const timer =
+      window.setTimeout(
+        () => {
+          void refreshClaimableBalance();
+        },
+        0,
+      );
 
-    return () => window.clearTimeout(timer);
-  }, [publicKey, connection]);
+    return () =>
+      window.clearTimeout(
+        timer,
+      );
+  }, [
+    publicKey,
+    connection,
+  ]);
 
   async function claim() {
     if (
@@ -109,7 +209,8 @@ export function ClaimCreatorRewards() {
     ) {
       setStatus({
         kind: "error",
-        message: "Connect Phantom in Devnet mode first.",
+        message:
+          `Connect a wallet on ${NETWORK_LABEL} first.`,
       });
       return;
     }
@@ -117,52 +218,74 @@ export function ClaimCreatorRewards() {
     try {
       setStatus({
         kind: "working",
-        message: "Building the Raydium creator-fee claim...",
+        message:
+          "Building the Raydium creator-fee claim...",
       });
 
-      const raydium = await loadDevnetRaydium({
-        connection,
-        owner: publicKey,
-        signTransaction,
-        signAllTransactions,
-      });
+      const raydium =
+        await loadKodiakRaydium({
+          connection,
+          owner: publicKey,
+          signTransaction,
+          signAllTransactions,
+        });
 
-      const { execute } = await raydium.launchpad.claimCreatorFee({
-        programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
-        mintB: NATIVE_MINT,
-        mintBProgram: TOKEN_PROGRAM_ID,
-        txVersion: TxVersion.V0,
-        feePayer: publicKey,
-      });
+      const { execute } =
+        await raydium.launchpad.claimCreatorFee(
+          {
+            programId:
+              KODIAK_LAUNCHPAD_PROGRAM_ID,
+            mintB:
+              NATIVE_MINT,
+            mintBProgram:
+              TOKEN_PROGRAM_ID,
+            txVersion:
+              TxVersion.V0,
+            feePayer:
+              publicKey,
+          },
+        );
 
       setStatus({
         kind: "working",
-        message: "Approve the Devnet creator-fee claim in Phantom...",
+        message:
+          `Approve the ${NETWORK_LABEL} creator-fee claim in your wallet...`,
       });
 
-      const result = await execute({ sendAndConfirm: true });
-      const signature = signatureFrom(result);
+      const result =
+        await execute({
+          sendAndConfirm:
+            true,
+        });
+
+      const signature =
+        signatureFrom(
+          result,
+        );
 
       await refreshClaimableBalance();
 
       setStatus({
         kind: "success",
         message:
-          "Raydium confirmed the creator-fee claim on Devnet.",
+          `Raydium confirmed the creator-fee claim on ${NETWORK_LABEL}.`,
         signature,
       });
     } catch (error) {
       setStatus({
         kind: "error",
         message:
-          error instanceof Error
+          error instanceof
+          Error
             ? error.message
             : "The creator-fee claim failed.",
       });
     }
   }
 
-  const busy = status.kind === "working";
+  const busy =
+    status.kind ===
+    "working";
 
   return (
     <section className="mt-6 rounded-[2rem] border border-emerald-400/20 bg-emerald-400/[0.04] p-5 sm:p-6">
@@ -173,69 +296,106 @@ export function ClaimCreatorRewards() {
           </p>
 
           <h2 className="mt-2 text-2xl font-black">
-            Claim Creator Rewards
+            Claim Creator
+            Rewards
           </h2>
 
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
-            Kodiak asks Raydium LaunchLab to release creator fees held for the
-            connected creator wallet. The Redis ledger below remains an
-            analytics and audit record only.
+            Kodiak asks
+            Raydium LaunchLab
+            to release creator
+            fees held for the
+            connected creator
+            wallet. The Redis
+            ledger below remains
+            an analytics and
+            audit record only.
           </p>
 
           <div className="mt-4 rounded-2xl border border-emerald-400/20 bg-black/20 p-4">
             <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-500">
-              Raydium claimable now
+              Raydium
+              claimable now
             </p>
 
             <p className="mt-2 text-2xl font-black text-emerald-300">
-              {claimableSol === null
+              {claimableSol ===
+              null
                 ? "Loading..."
-                : `${claimableSol.toFixed(9)} SOL`}
+                : `${claimableSol.toFixed(
+                    9,
+                  )} SOL`}
             </p>
 
             <p className="mt-1 text-xs leading-5 text-zinc-600">
-              Live balance from Raydium&apos;s on-chain creator-fee vault.
+              Live balance from
+              Raydium&apos;s
+              on-chain
+              creator-fee
+              vault.
             </p>
           </div>
         </div>
 
         <button
           type="button"
-          disabled={!connected || busy}
-          onClick={() => void claim()}
+          disabled={
+            !connected ||
+            busy
+          }
+          onClick={() =>
+            void claim()
+          }
           className="shrink-0 rounded-xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {busy ? "Claiming..." : "Claim on Devnet"}
+          {busy
+            ? "Claiming..."
+            : `Claim on ${NETWORK_LABEL}`}
         </button>
       </div>
 
       <div
         className={`mt-5 rounded-2xl border p-4 text-sm ${
-          status.kind === "error"
+          status.kind ===
+          "error"
             ? "border-rose-400/20 bg-rose-400/[0.05] text-rose-200"
-            : status.kind === "success"
+            : status.kind ===
+                "success"
               ? "border-emerald-400/20 bg-emerald-400/[0.05] text-emerald-200"
               : "border-white/10 bg-black/20 text-zinc-500"
         }`}
       >
-        <p className="font-bold">{status.message}</p>
+        <p className="font-bold">
+          {status.message}
+        </p>
 
-        {status.kind === "success" && status.signature ? (
+        {status.kind ===
+          "success" &&
+        status.signature ? (
           <a
-            href={`https://explorer.solana.com/tx/${status.signature}?cluster=devnet`}
+            href={kodiakExplorerTransactionUrl(
+              status.signature,
+            )}
             target="_blank"
             rel="noreferrer"
             className="mt-2 inline-block break-all text-xs font-black text-emerald-300 underline underline-offset-4"
           >
-            View Devnet transaction
+            View{" "}
+            {NETWORK_LABEL}{" "}
+            transaction
           </a>
         ) : null}
       </div>
 
       <p className="mt-4 text-xs leading-5 text-zinc-600">
-        The tracked creator amount on this page is an estimate from Kodiak&apos;s
-        recorded trades. Raydium&apos;s on-chain vault is the authority for what
-        can actually be claimed.
+        The tracked creator
+        amount on this page is
+        an estimate from
+        Kodiak&apos;s recorded
+        trades. Raydium&apos;s
+        on-chain vault is the
+        authority for what can
+        actually be claimed.
       </p>
     </section>
   );

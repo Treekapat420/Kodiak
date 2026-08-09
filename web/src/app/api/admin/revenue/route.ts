@@ -836,7 +836,6 @@ export async function PATCH(
 
       return NextResponse.json({
         recorded: true,
-        network: KODIAK_NETWORK,
         transferSignature: signature,
         transferredLamports,
         transferredSol:

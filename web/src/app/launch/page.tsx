@@ -113,7 +113,12 @@ function validUrl(value: string) {
 
 export default function LaunchPage() {
   const { connection } = useConnection();
-  const { connected, publicKey, signAllTransactions } = useWallet();
+  const {
+    connected,
+    publicKey,
+    signTransaction,
+    signAllTransactions,
+  } = useWallet();
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormState>(initialForm);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);

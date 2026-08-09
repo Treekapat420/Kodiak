@@ -10,23 +10,44 @@ import type {
   VersionedTransaction,
 } from "@solana/web3.js";
 
-type SignAllTransactions = <T extends Transaction | VersionedTransaction>(
+type WalletTransaction = Transaction | VersionedTransaction;
+
+type SignTransaction = <T extends WalletTransaction>(
+  transaction: T,
+) => Promise<T>;
+
+type SignAllTransactions = <T extends WalletTransaction>(
   transactions: T[],
 ) => Promise<T[]>;
 
 export async function loadDevnetRaydium({
   connection,
   owner,
+  signTransaction,
   signAllTransactions,
 }: {
   connection: Connection;
   owner: PublicKey;
+  signTransaction: SignTransaction;
   signAllTransactions: SignAllTransactions;
 }) {
+  const phantomFriendlySignAllTransactions: SignAllTransactions = async <
+    T extends WalletTransaction,
+  >(
+    transactions: T[],
+  ): Promise<T[]> => {
+    if (transactions.length === 1) {
+      const signedTransaction = await signTransaction(transactions[0]);
+      return [signedTransaction];
+    }
+
+    return signAllTransactions(transactions);
+  };
+
   return Raydium.load({
     connection,
     owner,
-    signAllTransactions,
+    signAllTransactions: phantomFriendlySignAllTransactions,
     cluster: "devnet",
     disableFeatureCheck: true,
     disableLoadToken: true,
@@ -36,7 +57,8 @@ export async function loadDevnetRaydium({
       BASE_HOST: "https://api-v3-devnet.raydium.io",
       OWNER_BASE_HOST: "https://owner-v1-devnet.raydium.io",
       SWAP_HOST: "https://transaction-v1-devnet.raydium.io",
-      CPMM_LOCK: "https://dynamic-ipfs-devnet.raydium.io/lock/cpmm/position",
+      CPMM_LOCK:
+        "https://dynamic-ipfs-devnet.raydium.io/lock/cpmm/position",
     },
   });
 }

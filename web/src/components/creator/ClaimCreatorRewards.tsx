@@ -2,7 +2,10 @@
 
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { NATIVE_MINT, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { TxVersion, getPdaCreatorVault, } from "@raydium-io/raydium-sdk-v2";
+import {
+  TxVersion,
+  getPdaCreatorVault,
+} from "@raydium-io/raydium-sdk-v2";
 import { useEffect, useState } from "react";
 import {
   DEVNET_LAUNCHPAD_PROGRAM_ID,
@@ -30,6 +33,7 @@ function signatureFrom(value: unknown): string | undefined {
     const v = record.txIds.find(
       (item) => typeof item === "string" && item.length > 20,
     );
+
     if (typeof v === "string") return v;
   }
 
@@ -38,7 +42,13 @@ function signatureFrom(value: unknown): string | undefined {
 
 export function ClaimCreatorRewards() {
   const { connection } = useConnection();
-  const { connected, publicKey, signAllTransactions } = useWallet();
+  const {
+    connected,
+    publicKey,
+    signTransaction,
+    signAllTransactions,
+  } = useWallet();
+
   const [claimableSol, setClaimableSol] = useState<number | null>(null);
 
   const [status, setStatus] = useState<Status>({
@@ -57,12 +67,12 @@ export function ClaimCreatorRewards() {
       const creatorVault = getPdaCreatorVault(
         DEVNET_LAUNCHPAD_PROGRAM_ID,
         publicKey,
-        NATIVE_MINT
+        NATIVE_MINT,
       ).publicKey;
 
       const accountInfo = await connection.getAccountInfo(
         creatorVault,
-        "confirmed"
+        "confirmed",
       );
 
       if (!accountInfo) {
@@ -72,7 +82,7 @@ export function ClaimCreatorRewards() {
 
       const balance = await connection.getTokenAccountBalance(
         creatorVault,
-        "confirmed"
+        "confirmed",
       );
 
       setClaimableSol(Number(balance.value.uiAmountString ?? "0"));
@@ -81,16 +91,22 @@ export function ClaimCreatorRewards() {
       setClaimableSol(null);
     }
   }
+
   useEffect(() => {
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       void refreshClaimableBalance();
     }, 0);
-    
-    return () => clearTimeout(timer);
+
+    return () => window.clearTimeout(timer);
   }, [publicKey, connection]);
 
   async function claim() {
-    if (!connected || !publicKey || !signAllTransactions) {
+    if (
+      !connected ||
+      !publicKey ||
+      !signTransaction ||
+      !signAllTransactions
+    ) {
       setStatus({
         kind: "error",
         message: "Connect Phantom in Devnet mode first.",
@@ -101,12 +117,13 @@ export function ClaimCreatorRewards() {
     try {
       setStatus({
         kind: "working",
-        message: "Building the Raydium creator-fee claim…",
+        message: "Building the Raydium creator-fee claim...",
       });
 
       const raydium = await loadDevnetRaydium({
         connection,
         owner: publicKey,
+        signTransaction,
         signAllTransactions,
       });
 
@@ -120,7 +137,7 @@ export function ClaimCreatorRewards() {
 
       setStatus({
         kind: "working",
-        message: "Approve the Devnet creator-fee claim in Phantom…",
+        message: "Approve the Devnet creator-fee claim in Phantom...",
       });
 
       const result = await execute({ sendAndConfirm: true });
@@ -154,37 +171,41 @@ export function ClaimCreatorRewards() {
           <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">
             On-chain rewards
           </p>
-          <h2 className="mt-2 text-2xl font-black">Claim Creator Rewards</h2>
+
+          <h2 className="mt-2 text-2xl font-black">
+            Claim Creator Rewards
+          </h2>
+
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
             Kodiak asks Raydium LaunchLab to release creator fees held for the
             connected creator wallet. The Redis ledger below remains an
             analytics and audit record only.
           </p>
 
-          <div className="rounded-2x1 border border-emerald-400/20 bg-black/20 p-4">
+          <div className="mt-4 rounded-2xl border border-emerald-400/20 bg-black/20 p-4">
             <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-500">
               Raydium claimable now
             </p>
-            </div>
 
-            <p className="mt-2 text-2x1 font-black text-emerald-300">
+            <p className="mt-2 text-2xl font-black text-emerald-300">
               {claimableSol === null
                 ? "Loading..."
                 : `${claimableSol.toFixed(9)} SOL`}
             </p>
-            
+
             <p className="mt-1 text-xs leading-5 text-zinc-600">
               Live balance from Raydium&apos;s on-chain creator-fee vault.
             </p>
           </div>
-        
+        </div>
+
         <button
           type="button"
           disabled={!connected || busy}
           onClick={() => void claim()}
           className="shrink-0 rounded-xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {busy ? "Claiming…" : "Claim on Devnet"}
+          {busy ? "Claiming..." : "Claim on Devnet"}
         </button>
       </div>
 

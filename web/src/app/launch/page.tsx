@@ -33,7 +33,6 @@ type FormState = {
   discord: string;
   supply: string;
   lpHandling: "burn" | "lock" | "keep";
-  postMigrationFee: boolean;
 };
 
 type SimulationDiagnostic = {
@@ -67,7 +66,6 @@ const initialForm: FormState = {
   initialBuySol: "0",
   supply: "1000000000",
   lpHandling: "burn",
-  postMigrationFee: true,
 };
 
 function Field({
@@ -113,12 +111,7 @@ function validUrl(value: string) {
 
 export default function LaunchPage() {
   const { connection } = useConnection();
-  const {
-    connected,
-    publicKey,
-    signTransaction,
-    signAllTransactions,
-  } = useWallet();
+  const { connected, publicKey, signAllTransactions } = useWallet();
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormState>(initialForm);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
@@ -262,7 +255,7 @@ export default function LaunchPage() {
   };
 
   const prepareLaunchTransaction = async () => {
-    if (!publicKey || !signTransaction || !signAllTransactions) {
+    if (!publicKey || !signAllTransactions) {
       setLaunchStatus({
         kind: "error",
         message: "Connect a wallet before preparing the launch.",
@@ -957,20 +950,20 @@ export default function LaunchPage() {
                   </div>
                 </div>
 
-                <label className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                  <input
-                    type="checkbox"
-                    checked={form.postMigrationFee}
-                    onChange={(event) => update("postMigrationFee", event.target.checked)}
-                    className="mt-1 h-5 w-5 accent-emerald-400"
-                  />
-                  <span>
-                    <span className="block font-black">Enable 1.05% post-migration creator fee</span>
-                    <span className="mt-1 block text-sm leading-6 text-zinc-500">
-                      Optional Token-2022 transfer fee after graduation.
-                    </span>
-                  </span>
-                </label>
+                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-5">
+                  <p className="font-black text-emerald-300">
+                    Post-migration creator Fee Key
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-zinc-400">
+                    Kodiak&apos;s current PlatformConfig sends 10% of the migrated
+                    CPMM LP fee rights to the creator through Raydium&apos;s Fee Key
+                    NFT, while 90% of the migrated LP is permanently burned.
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-zinc-600">
+                    This is controlled by Kodiak&apos;s on-chain PlatformConfig and
+                    is not a Token-2022 transfer fee or a per-launch toggle.
+                  </p>
+                </div>
 
                 <div className="rounded-2xl border border-amber-400/15 bg-amber-400/[0.06] p-5">
                   <p className="text-sm text-amber-200">Estimated launch cost</p>
@@ -993,7 +986,7 @@ export default function LaunchPage() {
                     ["Supply", Number(form.supply || 0).toLocaleString()],
                     ["LP handling", form.lpHandling],
                     ["Bonding creator fee", "0.45%"],
-                    ["Post-migration fee", form.postMigrationFee ? "1.05% enabled" : "Disabled"],
+                    ["Post-migration creator Fee Key", "10% CPMM LP fee share"],
                   ].map(([label, value]) => (
                     <div key={label} className="flex justify-between gap-5 border-b border-white/5 pb-3 last:border-0 last:pb-0">
                       <span className="text-zinc-500">{label}</span>

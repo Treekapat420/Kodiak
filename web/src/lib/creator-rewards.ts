@@ -370,10 +370,13 @@ export async function getCreatorLedger(
       (
         entry,
       ): entry is RewardEntry =>
-        Boolean(entry) &&
-        (!entry.network ||
-          entry.network ===
-            KODIAK_NETWORK),
+        entry !== null,
+    )
+    .filter(
+      (entry) =>
+        !entry.network ||
+        entry.network ===
+          KODIAK_NETWORK,
     )
     .sort(
       (a, b) =>

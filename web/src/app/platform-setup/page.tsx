@@ -786,7 +786,7 @@ export default function PlatformSetupPage() {
                 {[
                   [
                     "Kodiak platform fee",
-                    "0.60%",
+                    "0.50%",
                   ],
                   [
                     "Creator curve fee",

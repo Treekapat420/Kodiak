@@ -15,6 +15,10 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 
+import {
+  kodiakExplorerTransactionUrl,
+} from "@/lib/solana/network";
+
 type Interval = "1s" | "1m" | "5m" | "15m" | "1h";
 type Mode = "candles" | "line";
 
@@ -666,7 +670,9 @@ export function LaunchChart({ mint }: { mint: string }) {
                 {trades.slice(0, 8).map((trade) => (
                   <a
                     key={trade.signature}
-                    href={`https://explorer.solana.com/tx/${trade.signature}?cluster=devnet`}
+                    href={kodiakExplorerTransactionUrl(
+                      trade.signature,
+                    )}
                     target="_blank"
                     rel="noreferrer"
                     className="grid grid-cols-[auto_1fr_auto] items-center gap-3 px-4 py-3 text-xs transition hover:bg-white/[0.03]"

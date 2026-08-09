@@ -2,11 +2,18 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import {
   Curve,
-  DEVNET_PROGRAM_ID,
   getPdaLaunchpadPoolId,
   LaunchpadConfig,
   LaunchpadPool,
 } from "@raydium-io/raydium-sdk-v2";
+
+import { DEVNET_LAUNCHPAD_PROGRAM_ID } from "@/lib/raydium/devnet";
+import {
+  KODIAK_IS_DEVNET,
+  KODIAK_IS_MAINNET,
+  KODIAK_NETWORK,
+  KODIAK_RPC_URL,
+} from "@/lib/solana/network";
 
 export type StoredTrade = {
   mint: string;
@@ -36,12 +43,39 @@ type TokenBalance = {
   amount: number;
 };
 
+function serverRpcUrl() {
+  if (KODIAK_IS_MAINNET) {
+    return (
+      process.env.SOLANA_MAINNET_RPC_URL?.trim() ||
+      process.env.SOLANA_RPC_URL?.trim() ||
+      KODIAK_RPC_URL
+    );
+  }
+
+  return (
+    process.env.SOLANA_DEVNET_RPC_URL?.trim() ||
+    process.env.SOLANA_RPC_URL?.trim() ||
+    KODIAK_RPC_URL
+  );
+}
+
 const connection = new Connection(
-  process.env.NEXT_PUBLIC_SOLANA_RPC_URL ||
-    process.env.SOLANA_RPC_URL ||
-    "https://api.devnet.solana.com",
+  serverRpcUrl(),
   "confirmed",
 );
+
+function getLaunchpadProgramId() {
+  if (!KODIAK_IS_DEVNET) {
+    throw new Error(
+      "Kodiak Mainnet chart verification is not enabled yet. " +
+        "The network layer is Mainnet-aware, but the production Raydium " +
+        "LaunchLab program configuration must be verified before Mainnet " +
+        "trades can be indexed.",
+    );
+  }
+
+  return DEVNET_LAUNCHPAD_PROGRAM_ID;
+}
 
 function redisConfig() {
   const url =
@@ -52,7 +86,9 @@ function redisConfig() {
     process.env.UPSTASH_REDIS_REST_TOKEN;
 
   if (!url || !token) {
-    throw new Error("Redis REST environment variables are missing.");
+    throw new Error(
+      "Redis REST environment variables are missing.",
+    );
   }
 
   return {
@@ -61,7 +97,9 @@ function redisConfig() {
   };
 }
 
-async function redis<T = unknown>(command: unknown[]): Promise<T> {
+async function redis<T = unknown>(
+  command: unknown[],
+): Promise<T> {
   const { url, token } = redisConfig();
 
   const response = await fetch(url, {
@@ -75,7 +113,9 @@ async function redis<T = unknown>(command: unknown[]): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`Redis request failed: ${response.status}`);
+    throw new Error(
+      `Redis request failed: ${response.status}`,
+    );
   }
 
   const payload = (await response.json()) as {
@@ -90,14 +130,22 @@ async function redis<T = unknown>(command: unknown[]): Promise<T> {
   return payload.result as T;
 }
 
+/*
+ * Keep the existing Devnet Redis key format intact so all of the current
+ * TEST18 trade history and candles remain available after this refactor.
+ *
+ * Mainnet will naturally use a separate kodiak:mainnet:* namespace.
+ */
 const tradeKey = (mint: string) =>
-  `kodiak:devnet:trades:${mint}`;
+  `kodiak:${KODIAK_NETWORK}:trades:${mint}`;
 
 const signatureKey = (mint: string) =>
-  `kodiak:devnet:trade-signatures:${mint}`;
+  `kodiak:${KODIAK_NETWORK}:trade-signatures:${mint}`;
 
 function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) =>
+    setTimeout(resolve, ms),
+  );
 }
 
 function balanceAmount(value: {
@@ -107,17 +155,25 @@ function balanceAmount(value: {
     decimals?: number;
   };
 }) {
-  const uiAmountString = value.uiTokenAmount?.uiAmountString;
+  const uiAmountString =
+    value.uiTokenAmount?.uiAmountString;
 
   if (uiAmountString != null) {
     const parsed = Number(uiAmountString);
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
-  const raw = Number(value.uiTokenAmount?.amount ?? "0");
-  const decimals = Number(value.uiTokenAmount?.decimals ?? 0);
+  const raw = Number(
+    value.uiTokenAmount?.amount ?? "0",
+  );
+  const decimals = Number(
+    value.uiTokenAmount?.decimals ?? 0,
+  );
 
-  if (!Number.isFinite(raw) || !Number.isFinite(decimals)) {
+  if (
+    !Number.isFinite(raw) ||
+    !Number.isFinite(decimals)
+  ) {
     return 0;
   }
 
@@ -185,6 +241,7 @@ function findOwnerTokenDelta(
   for (const row of [...pre, ...post]) {
     if (row.mint !== mint) continue;
     if (row.owner !== owner) continue;
+
     indexes.add(row.accountIndex);
   }
 
@@ -209,7 +266,8 @@ function findOwnerTokenDelta(
 
     if (
       !best ||
-      Math.abs(next.delta) > Math.abs(best.delta)
+      Math.abs(next.delta) >
+        Math.abs(best.delta)
     ) {
       best = {
         accountIndex,
@@ -261,7 +319,8 @@ function findPoolTokenDelta(
 
     if (
       !best ||
-      Math.abs(next.delta) > Math.abs(best.delta)
+      Math.abs(next.delta) >
+        Math.abs(best.delta)
     ) {
       best = {
         accountIndex,
@@ -281,59 +340,82 @@ async function readLaunchpadCurvePrices(
   closePriceSol?: number;
 }> {
   const mintA = new PublicKey(mint);
+
   const poolId = getPdaLaunchpadPoolId(
-    DEVNET_PROGRAM_ID.LAUNCHPAD_PROGRAM,
+    getLaunchpadProgramId(),
     mintA,
     NATIVE_MINT,
   ).publicKey;
 
   let lastError: unknown;
 
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt < 6;
+    attempt += 1
+  ) {
     try {
-      const poolAccount = await connection.getAccountInfo(
-        poolId,
-        {
-          commitment: "confirmed",
-          minContextSlot,
-        },
-      );
+      const poolAccount =
+        await connection.getAccountInfo(
+          poolId,
+          {
+            commitment: "confirmed",
+            minContextSlot,
+          },
+        );
 
       if (!poolAccount) {
-        throw new Error("LaunchLab pool account is not available yet.");
+        throw new Error(
+          "LaunchLab pool account is not available yet.",
+        );
       }
 
-      const poolInfo = LaunchpadPool.decode(poolAccount.data);
+      const poolInfo =
+        LaunchpadPool.decode(
+          poolAccount.data,
+        );
 
-      const configAccount = await connection.getAccountInfo(
-        poolInfo.configId,
-        {
-          commitment: "confirmed",
-          minContextSlot,
-        },
-      );
+      const configAccount =
+        await connection.getAccountInfo(
+          poolInfo.configId,
+          {
+            commitment: "confirmed",
+            minContextSlot,
+          },
+        );
 
       if (!configAccount) {
-        throw new Error("LaunchLab config account is not available yet.");
+        throw new Error(
+          "LaunchLab config account is not available yet.",
+        );
       }
 
-      const configInfo = LaunchpadConfig.decode(
-        configAccount.data,
-      );
+      const configInfo =
+        LaunchpadConfig.decode(
+          configAccount.data,
+        );
 
-      const openPriceSol = Curve.getPoolInitPriceByPool({
-        poolInfo,
-        curveType: configInfo.curveType,
-        decimalA: poolInfo.mintDecimalsA,
-        decimalB: poolInfo.mintDecimalsB,
-      }).toNumber();
+      const openPriceSol =
+        Curve.getPoolInitPriceByPool({
+          poolInfo,
+          curveType:
+            configInfo.curveType,
+          decimalA:
+            poolInfo.mintDecimalsA,
+          decimalB:
+            poolInfo.mintDecimalsB,
+        }).toNumber();
 
-      const closePriceSol = Curve.getPrice({
-        poolInfo,
-        curveType: configInfo.curveType,
-        decimalA: poolInfo.mintDecimalsA,
-        decimalB: poolInfo.mintDecimalsB,
-      }).toNumber();
+      const closePriceSol =
+        Curve.getPrice({
+          poolInfo,
+          curveType:
+            configInfo.curveType,
+          decimalA:
+            poolInfo.mintDecimalsA,
+          decimalB:
+            poolInfo.mintDecimalsB,
+        }).toNumber();
 
       if (
         !Number.isFinite(openPriceSol) ||
@@ -354,7 +436,9 @@ async function readLaunchpadCurvePrices(
       lastError = error;
 
       if (attempt < 5) {
-        await sleep(700 + attempt * 350);
+        await sleep(
+          700 + attempt * 350,
+        );
       }
     }
   }
@@ -373,18 +457,28 @@ export async function inferTokenAmount(
   wallet: string,
   side: "buy" | "sell" = "buy",
 ): Promise<InferredTrade> {
-  const parsed = await connection.getParsedTransaction(
-    signature,
-    {
-      commitment: "confirmed",
-      maxSupportedTransactionVersion: 0,
-    },
-  );
+  /*
+   * The network guard intentionally happens before transaction lookup.
+   * Until Kodiak's production LaunchLab program configuration is verified,
+   * this prevents a Mainnet switch from indexing trades against Devnet
+   * bonding-curve assumptions.
+   */
+  getLaunchpadProgramId();
+
+  const parsed =
+    await connection.getParsedTransaction(
+      signature,
+      {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      },
+    );
 
   if (!parsed) {
     return {
       tokenAmount: 0,
-      timestamp: Math.floor(Date.now() / 1000),
+      timestamp:
+        Math.floor(Date.now() / 1000),
     };
   }
 
@@ -398,37 +492,53 @@ export async function inferTokenAmount(
     };
   }
 
-  const owner = new PublicKey(wallet).toBase58();
-  const pre = collectBalances(parsed.meta?.preTokenBalances);
-  const post = collectBalances(parsed.meta?.postTokenBalances);
+  const owner =
+    new PublicKey(wallet).toBase58();
 
-  const ownerDelta = findOwnerTokenDelta(
-    pre,
-    post,
-    mint,
-    owner,
-  );
+  const pre =
+    collectBalances(
+      parsed.meta?.preTokenBalances,
+    );
 
-  const ownerDirectionMatches = ownerDelta
-    ? side === "buy"
-      ? ownerDelta.delta > 0
-      : ownerDelta.delta < 0
-    : false;
+  const post =
+    collectBalances(
+      parsed.meta?.postTokenBalances,
+    );
 
-  const poolDelta = findPoolTokenDelta(
-    pre,
-    post,
-    mint,
-    side,
-  );
+  const ownerDelta =
+    findOwnerTokenDelta(
+      pre,
+      post,
+      mint,
+      owner,
+    );
 
-  const tokenAmount = Math.abs(
-    ownerDirectionMatches
-      ? ownerDelta?.delta ?? 0
-      : poolDelta?.delta ?? 0,
-  );
+  const ownerDirectionMatches =
+    ownerDelta
+      ? side === "buy"
+        ? ownerDelta.delta > 0
+        : ownerDelta.delta < 0
+      : false;
 
-  if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) {
+  const poolDelta =
+    findPoolTokenDelta(
+      pre,
+      post,
+      mint,
+      side,
+    );
+
+  const tokenAmount =
+    Math.abs(
+      ownerDirectionMatches
+        ? ownerDelta?.delta ?? 0
+        : poolDelta?.delta ?? 0,
+    );
+
+  if (
+    !Number.isFinite(tokenAmount) ||
+    tokenAmount <= 0
+  ) {
     return {
       tokenAmount: 0,
       timestamp:
@@ -448,23 +558,28 @@ export async function inferTokenAmount(
    * prevents this server from accepting pool state older than the confirmed
    * trade transaction.
    */
-  const curvePrices = await readLaunchpadCurvePrices(
-    mint,
-    parsed.slot,
-  );
+  const curvePrices =
+    await readLaunchpadCurvePrices(
+      mint,
+      parsed.slot,
+    );
 
   return {
     tokenAmount,
     timestamp:
       parsed.blockTime ??
       Math.floor(Date.now() / 1000),
-    openPriceSol: curvePrices.openPriceSol,
-    closePriceSol: curvePrices.closePriceSol,
+    openPriceSol:
+      curvePrices.openPriceSol,
+    closePriceSol:
+      curvePrices.closePriceSol,
     slot: parsed.slot,
   };
 }
 
-export async function saveTrade(trade: StoredTrade) {
+export async function saveTrade(
+  trade: StoredTrade,
+) {
   const added = await redis<number>([
     "SADD",
     signatureKey(trade.mint),
@@ -472,15 +587,23 @@ export async function saveTrade(trade: StoredTrade) {
   ]);
 
   if (added === 0) {
-    const existing = await getTrades(trade.mint);
+    const existing =
+      await getTrades(
+        trade.mint,
+      );
+
     return (
       existing.find(
-        (row) => row.signature === trade.signature,
+        (row) =>
+          row.signature ===
+          trade.signature,
       ) ?? trade
     );
   }
 
-  const key = tradeKey(trade.mint);
+  const key = tradeKey(
+    trade.mint,
+  );
 
   await redis([
     "RPUSH",
@@ -501,12 +624,13 @@ export async function saveTrade(trade: StoredTrade) {
 export async function getTrades(
   mint: string,
 ): Promise<StoredTrade[]> {
-  const rows = await redis<string[]>([
-    "LRANGE",
-    tradeKey(mint),
-    0,
-    -1,
-  ]);
+  const rows =
+    await redis<string[]>([
+      "LRANGE",
+      tradeKey(mint),
+      0,
+      -1,
+    ]);
 
   if (!Array.isArray(rows)) {
     return [];
@@ -515,15 +639,24 @@ export async function getTrades(
   return rows
     .map((row) => {
       try {
-        return JSON.parse(row) as StoredTrade;
+        return JSON.parse(
+          row,
+        ) as StoredTrade;
       } catch {
         return null;
       }
     })
     .filter(
-      (row): row is StoredTrade => Boolean(row),
+      (
+        row,
+      ): row is StoredTrade =>
+        Boolean(row),
     )
-    .sort((a, b) => a.timestamp - b.timestamp);
+    .sort(
+      (a, b) =>
+        a.timestamp -
+        b.timestamp,
+    );
 }
 
 export function buildCandles(
@@ -545,24 +678,42 @@ export function buildCandles(
   let previousClose = 0;
 
   for (const trade of trades) {
-    const storedOpen = Number(trade.openPriceSol);
-    const storedClose = Number(trade.closePriceSol);
+    const storedOpen = Number(
+      trade.openPriceSol,
+    );
+
+    const storedClose = Number(
+      trade.closePriceSol,
+    );
 
     if (
-      !Number.isFinite(storedClose) ||
+      !Number.isFinite(
+        storedClose,
+      ) ||
       storedClose <= 0
     ) {
       continue;
     }
 
     const eventOpen =
-      Number.isFinite(previousClose) && previousClose > 0
+      Number.isFinite(
+        previousClose,
+      ) &&
+      previousClose > 0
         ? previousClose
-        : Number.isFinite(storedOpen) && storedOpen > 0
+        : Number.isFinite(
+              storedOpen,
+            ) &&
+            storedOpen > 0
           ? storedOpen
           : 0;
 
-    if (!Number.isFinite(eventOpen) || eventOpen <= 0) {
+    if (
+      !Number.isFinite(
+        eventOpen,
+      ) ||
+      eventOpen <= 0
+    ) {
       continue;
     }
 
@@ -576,57 +727,94 @@ export function buildCandles(
      */
     const directionIsValid =
       trade.side === "buy"
-        ? storedClose > eventOpen
-        : storedClose < eventOpen;
+        ? storedClose >
+          eventOpen
+        : storedClose <
+          eventOpen;
 
-    if (!directionIsValid) {
+    if (
+      !directionIsValid
+    ) {
       continue;
     }
 
     const time =
-      Math.floor(trade.timestamp / intervalSeconds) *
+      Math.floor(
+        trade.timestamp /
+          intervalSeconds,
+      ) *
       intervalSeconds;
 
-    const eventHigh = Math.max(
-      eventOpen,
-      storedClose,
-    );
+    const eventHigh =
+      Math.max(
+        eventOpen,
+        storedClose,
+      );
 
-    const eventLow = Math.min(
-      eventOpen,
-      storedClose,
-    );
+    const eventLow =
+      Math.min(
+        eventOpen,
+        storedClose,
+      );
 
-    const current = buckets.get(time);
+    const current =
+      buckets.get(time);
 
     if (!current) {
-      buckets.set(time, {
+      buckets.set(
         time,
-        open: eventOpen,
-        high: eventHigh,
-        low: eventLow,
-        close: storedClose,
-        volume: Math.abs(Number(trade.solAmount || 0)),
-      });
+        {
+          time,
+          open:
+            eventOpen,
+          high:
+            eventHigh,
+          low:
+            eventLow,
+          close:
+            storedClose,
+          volume:
+            Math.abs(
+              Number(
+                trade.solAmount ||
+                  0,
+              ),
+            ),
+        },
+      );
     } else {
-      current.high = Math.max(
-        current.high,
-        eventHigh,
-      );
-      current.low = Math.min(
-        current.low,
-        eventLow,
-      );
-      current.close = storedClose;
-      current.volume += Math.abs(
-        Number(trade.solAmount || 0),
-      );
+      current.high =
+        Math.max(
+          current.high,
+          eventHigh,
+        );
+
+      current.low =
+        Math.min(
+          current.low,
+          eventLow,
+        );
+
+      current.close =
+        storedClose;
+
+      current.volume +=
+        Math.abs(
+          Number(
+            trade.solAmount ||
+              0,
+          ),
+        );
     }
 
-    previousClose = storedClose;
+    previousClose =
+      storedClose;
   }
 
-  return [...buckets.values()].sort(
-    (a, b) => a.time - b.time,
+  return [
+    ...buckets.values(),
+  ].sort(
+    (a, b) =>
+      a.time - b.time,
   );
 }

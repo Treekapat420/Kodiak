@@ -5,28 +5,60 @@ import {
   WalletDisconnectButton,
   WalletMultiButton,
 } from "@solana/wallet-adapter-react-ui";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import {
+  useConnection,
+  useWallet,
+} from "@solana/wallet-adapter-react";
 
-function shortAddress(address: string) {
+import {
+  kodiakExplorerAddressUrl,
+  kodiakNetworkLabel,
+} from "@/lib/solana/network";
+
+const NETWORK_LABEL = kodiakNetworkLabel();
+
+function shortAddress(
+  address: string,
+) {
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
 }
 
 export function KodiakWalletButton() {
-  const { connection } = useConnection();
-  const { connected, publicKey, wallet } = useWallet();
-  const [showDetails, setShowDetails] = useState(false);
+  const { connection } =
+    useConnection();
 
-  const explorerUrl = useMemo(() => {
-    if (!publicKey) return null;
-    return `https://explorer.solana.com/address/${publicKey.toBase58()}?cluster=devnet`;
-  }, [publicKey]);
+  const {
+    connected,
+    publicKey,
+    wallet,
+  } = useWallet();
 
-  if (!connected || !publicKey) {
+  const [
+    showDetails,
+    setShowDetails,
+  ] = useState(false);
+
+  const explorerUrl =
+    useMemo(() => {
+      if (!publicKey) {
+        return null;
+      }
+
+      return kodiakExplorerAddressUrl(
+        publicKey.toBase58(),
+      );
+    }, [publicKey]);
+
+  if (
+    !connected ||
+    !publicKey
+  ) {
     return (
       <div className="flex flex-col items-stretch gap-2 sm:items-end">
         <WalletMultiButton className="!h-auto !rounded-xl !bg-emerald-400 !px-5 !py-3 !font-black !text-black hover:!bg-emerald-300">
           Select Wallet
         </WalletMultiButton>
+
         <p className="max-w-[260px] text-xs leading-5 text-zinc-500">
           Supports installed Wallet Standard wallets, including Jupiter,
           Backpack, Phantom, and Solflare.
@@ -39,14 +71,24 @@ export function KodiakWalletButton() {
     <div className="relative">
       <button
         type="button"
-        onClick={() => setShowDetails((current) => !current)}
+        onClick={() =>
+          setShowDetails(
+            (current) =>
+              !current,
+          )
+        }
         className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-left"
       >
         <span className="block text-xs font-bold uppercase tracking-wider text-emerald-300">
-          Devnet · {wallet?.adapter.name ?? "Wallet"}
+          {NETWORK_LABEL} ·{" "}
+          {wallet?.adapter.name ??
+            "Wallet"}
         </span>
+
         <span className="mt-1 block font-mono text-sm font-black text-white">
-          {shortAddress(publicKey.toBase58())}
+          {shortAddress(
+            publicKey.toBase58(),
+          )}
         </span>
       </button>
 
@@ -55,11 +97,19 @@ export function KodiakWalletButton() {
           <p className="text-xs font-bold uppercase tracking-wider text-zinc-500">
             Connected wallet
           </p>
+
           <p className="mt-2 break-all font-mono text-xs text-zinc-300">
             {publicKey.toBase58()}
           </p>
+
           <p className="mt-3 text-xs text-zinc-500">
-            RPC: {connection.rpcEndpoint.includes("devnet") ? "Devnet" : "Custom"}
+            Network:{" "}
+            {NETWORK_LABEL}
+          </p>
+
+          <p className="mt-1 break-all text-[11px] leading-5 text-zinc-600">
+            RPC:{" "}
+            {connection.rpcEndpoint}
           </p>
 
           <div className="mt-4 grid gap-2">

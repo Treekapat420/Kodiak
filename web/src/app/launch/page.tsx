@@ -1171,7 +1171,16 @@ export default function LaunchPage() {
               type="button"
               disabled={!stepValid}
               onClick={() => {
-                if (stepValid) setStep((current) => Math.min(current + 1, 4));
+                if (stepValid) {
+                  setStep((current) => Math.min(current + 1, 4));
+                  window.setTimeout(() => {
+                    window.scrollTo({
+                      top: 0,
+                      left: 0,
+                      behavior: "smooth",
+                    });
+                  }, 0);
+                }
               }}
               className="rounded-2xl bg-emerald-400 px-7 py-4 font-black text-black transition disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
             >

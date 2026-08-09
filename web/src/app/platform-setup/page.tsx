@@ -4,11 +4,16 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import BN from "bn.js";
 import {
+  Connection,
   LAMPORTS_PER_SOL,
   PublicKey,
   VersionedTransaction,
 } from "@solana/web3.js";
-import { TxVersion } from "@raydium-io/raydium-sdk-v2";
+import {
+  LAUNCHPAD_PROGRAM,
+  Raydium,
+  TxVersion,
+} from "@raydium-io/raydium-sdk-v2";
 import {
   useConnection,
   useWallet,
@@ -76,6 +81,19 @@ const MAINNET_PLATFORM_LOCK_NFT_WALLET =
 const MAINNET_TRANSFER_FEE_AUTH_WALLET =
   process.env.NEXT_PUBLIC_KODIAK_TRANSFER_FEE_AUTH_WALLET?.trim() ?? "";
 
+const MAINNET_SETUP_ENABLED =
+  process.env.NEXT_PUBLIC_KODIAK_MAINNET_SETUP_ENABLED
+    ?.trim()
+    .toLowerCase() === "true";
+
+const MAINNET_SETUP_RPC_URL =
+  process.env.NEXT_PUBLIC_SOLANA_MAINNET_RPC_URL?.trim() ?? "";
+
+const MAINNET_SETUP_READY =
+  KODIAK_MAINNET_REQUESTED_BUT_LOCKED &&
+  MAINNET_SETUP_ENABLED &&
+  Boolean(MAINNET_SETUP_RPC_URL);
+
 function validConfiguredPublicKey(value: string) {
   if (!value) return false;
 
@@ -120,6 +138,23 @@ function getMainnetAuthorities(): PlatformAuthorities {
 
 export default function PlatformSetupPage() {
   const { connection } = useConnection();
+
+  const mainnetSetupConnection =
+    MAINNET_SETUP_READY
+      ? new Connection(
+          MAINNET_SETUP_RPC_URL,
+          "confirmed",
+        )
+      : null;
+
+  const activeSetupConnection =
+    mainnetSetupConnection ??
+    connection;
+
+  const isolatedMainnetSetup =
+    Boolean(
+      mainnetSetupConnection,
+    );
 
   const {
     connected,
@@ -171,7 +206,7 @@ export default function PlatformSetupPage() {
 
       try {
         const lamports =
-          await connection.getBalance(
+          await activeSetupConnection.getBalance(
             publicKey,
             "confirmed",
           );
@@ -197,7 +232,7 @@ export default function PlatformSetupPage() {
       cancelled = true;
     };
   }, [
-    connection,
+    activeSetupConnection,
     publicKey,
   ]);
 
@@ -205,6 +240,21 @@ export default function PlatformSetupPage() {
     let cancelled = false;
 
     async function loadConfigs() {
+      if (isolatedMainnetSetup) {
+        setConfigOptions([]);
+        setCpConfigId(
+          KODIAK_MAINNET_CPMM_CONFIG_ID,
+        );
+
+        setStatus({
+          kind: "idle",
+          message:
+            "Isolated Mainnet PlatformConfig setup is armed. The rest of Kodiak remains on Devnet.",
+        });
+
+        return;
+      }
+
       if (KODIAK_IS_MAINNET) {
         setConfigOptions([]);
         setCpConfigId(
@@ -272,7 +322,7 @@ export default function PlatformSetupPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isolatedMainnetSetup]);
 
   let cpConfigIsValid = false;
 
@@ -287,15 +337,15 @@ export default function PlatformSetupPage() {
       false;
   }
 
-  /*
-   * IMPORTANT:
-   * Mainnet creation is still intentionally disabled here.
-   *
-   * The Mainnet parameters below are fully prepared, but canCreate remains
-   * Devnet-only until Kodiak completes the final production review.
-   */
-  const canCreate =
-    KODIAK_IS_DEVNET &&
+  const signerMatchesMainnetAdmin =
+    Boolean(publicKey) &&
+    validConfiguredPublicKey(
+      MAINNET_PLATFORM_ADMIN_WALLET,
+    ) &&
+    publicKey?.toBase58() ===
+      MAINNET_PLATFORM_ADMIN_WALLET;
+
+  const commonCreateRequirements =
     connected &&
     Boolean(publicKey) &&
     Boolean(signTransaction) &&
@@ -305,21 +355,23 @@ export default function PlatformSetupPage() {
     status.kind !==
       "working";
 
-  async function createPlatform() {
-    /*
-     * Keep this hard guard in place until the final Mainnet activation step.
-     * Merely requesting Mainnet or configuring production wallets cannot
-     * create a real Mainnet PlatformConfig.
-     */
-    if (!KODIAK_IS_DEVNET) {
-      setStatus({
-        kind: "error",
-        message:
-          "Mainnet Platform Setup is still transaction-locked.",
-      });
-      return;
-    }
+  const canCreateDevnet =
+    KODIAK_IS_DEVNET &&
+    !isolatedMainnetSetup &&
+    commonCreateRequirements;
 
+  const canCreateIsolatedMainnet =
+    isolatedMainnetSetup &&
+    MAINNET_AUTHORITY_CONFIG_READY &&
+    MAINNET_CPMM_CONFIG_READY &&
+    signerMatchesMainnetAdmin &&
+    commonCreateRequirements;
+
+  const canCreate =
+    canCreateDevnet ||
+    canCreateIsolatedMainnet;
+
+  async function createPlatform() {
     if (
       !publicKey ||
       !signTransaction ||
@@ -329,15 +381,23 @@ export default function PlatformSetupPage() {
       return;
     }
 
+    const targetIsMainnet =
+      isolatedMainnetSetup;
+
+    const targetLabel =
+      targetIsMainnet
+        ? "Mainnet"
+        : "Devnet";
+
     setStatus({
       kind: "working",
       message:
-        `Building Kodiak PlatformConfig on Solana ${NETWORK_LABEL}...`,
+        `Building Kodiak PlatformConfig on Solana ${targetLabel}...`,
     });
 
     try {
       const cpConfig =
-        KODIAK_IS_MAINNET
+        targetIsMainnet
           ? new PublicKey(
               KODIAK_MAINNET_CPMM_CONFIG_ID,
             )
@@ -347,7 +407,7 @@ export default function PlatformSetupPage() {
 
       const authorities:
         PlatformAuthorities =
-        KODIAK_IS_MAINNET
+        targetIsMainnet
           ? getMainnetAuthorities()
           : {
               platformAdmin:
@@ -365,7 +425,7 @@ export default function PlatformSetupPage() {
        * signer must be Kodiak's configured platform admin.
        */
       if (
-        KODIAK_IS_MAINNET &&
+        targetIsMainnet &&
         !publicKey.equals(
           authorities.platformAdmin,
         )
@@ -376,13 +436,48 @@ export default function PlatformSetupPage() {
       }
 
       const raydium =
-        await loadKodiakRaydium({
-          connection,
-          owner:
-            publicKey,
-          signTransaction,
-          signAllTransactions,
-        });
+        targetIsMainnet
+          ? await Raydium.load({
+              connection:
+                activeSetupConnection,
+              owner:
+                publicKey,
+              signAllTransactions:
+                async (
+                  transactions,
+                ) => {
+                  if (
+                    transactions.length ===
+                    1
+                  ) {
+                    return [
+                      await signTransaction(
+                        transactions[0],
+                      ),
+                    ];
+                  }
+
+                  return signAllTransactions(
+                    transactions,
+                  );
+                },
+              cluster:
+                "mainnet",
+              disableFeatureCheck:
+                true,
+              disableLoadToken:
+                true,
+              blockhashCommitment:
+                "confirmed",
+            })
+          : await loadKodiakRaydium({
+              connection:
+                activeSetupConnection,
+              owner:
+                publicKey,
+              signTransaction,
+              signAllTransactions,
+            });
 
       const {
         transaction,
@@ -392,7 +487,9 @@ export default function PlatformSetupPage() {
         await raydium.launchpad.createPlatformConfig(
           {
             programId:
-              KODIAK_LAUNCHPAD_PROGRAM_ID,
+              targetIsMainnet
+                ? LAUNCHPAD_PROGRAM
+                : KODIAK_LAUNCHPAD_PROGRAM_ID,
             platformAdmin:
               authorities.platformAdmin,
             platformClaimFeeWallet:
@@ -443,13 +540,13 @@ export default function PlatformSetupPage() {
       setStatus({
         kind: "working",
         message:
-          `Simulating the ${NETWORK_LABEL} transaction before opening your wallet...`,
+          `Simulating the ${targetLabel} transaction before opening your wallet...`,
       });
 
       const simulation =
         transaction instanceof
         VersionedTransaction
-          ? await connection.simulateTransaction(
+          ? await activeSetupConnection.simulateTransaction(
               transaction,
               {
                 commitment:
@@ -460,7 +557,7 @@ export default function PlatformSetupPage() {
                   false,
               },
             )
-          : await connection.simulateTransaction(
+          : await activeSetupConnection.simulateTransaction(
               transaction,
             );
 
@@ -482,7 +579,7 @@ export default function PlatformSetupPage() {
         setStatus({
           kind: "error",
           message:
-            `${NETWORK_LABEL} simulation failed: ${errorDetails}`,
+            `${targetLabel} simulation failed: ${errorDetails}`,
           logs:
             simulationLogs,
         });
@@ -493,7 +590,7 @@ export default function PlatformSetupPage() {
       setStatus({
         kind: "working",
         message:
-          `Simulation passed. Approve the ${NETWORK_LABEL} transaction in your wallet...`,
+          `Simulation passed. Approve the ${targetLabel} transaction in your wallet...`,
       });
 
       const result =
@@ -506,7 +603,7 @@ export default function PlatformSetupPage() {
         extInfo.platformId.toBase58();
 
       window.localStorage.setItem(
-        KODIAK_IS_MAINNET
+        targetIsMainnet
           ? "kodiak-mainnet-platform-id"
           : "kodiak-devnet-platform-id",
         platformId,
@@ -530,7 +627,7 @@ export default function PlatformSetupPage() {
       setStatus({
         kind: "success",
         message:
-          `Kodiak ${NETWORK_LABEL} PlatformConfig created.`,
+          `Kodiak ${targetLabel} PlatformConfig created.`,
         platformId,
         signature,
       });
@@ -626,6 +723,42 @@ export default function PlatformSetupPage() {
               </p>
             </div>
 
+            {KODIAK_MAINNET_REQUESTED_BUT_LOCKED && (
+              <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-5">
+                <div className="flex items-center justify-between gap-4">
+                  <p className="font-black text-zinc-200">
+                    Isolated Mainnet setup
+                  </p>
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-black ${
+                      MAINNET_SETUP_READY
+                        ? "bg-emerald-400/10 text-emerald-300"
+                        : "bg-amber-300/10 text-amber-300"
+                    }`}
+                  >
+                    {MAINNET_SETUP_READY
+                      ? "ARMED"
+                      : "LOCKED"}
+                  </span>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-zinc-400">
+                  This setup uses the dedicated Mainnet RPC only on this page.
+                  The rest of Kodiak remains on Devnet.
+                </p>
+                {!MAINNET_SETUP_ENABLED && (
+                  <p className="mt-3 text-sm font-bold text-amber-300">
+                    NEXT_PUBLIC_KODIAK_MAINNET_SETUP_ENABLED is not enabled.
+                  </p>
+                )}
+                {MAINNET_SETUP_ENABLED &&
+                  !MAINNET_SETUP_RPC_URL && (
+                    <p className="mt-3 text-sm font-bold text-red-300">
+                      The dedicated Mainnet RPC URL is missing.
+                    </p>
+                  )}
+              </div>
+            )}
+
             <div className="mt-7 space-y-5">
               <div>
                 <p className="text-sm font-bold text-zinc-400">
@@ -638,7 +771,9 @@ export default function PlatformSetupPage() {
                 </p>
 
                 <p className="mt-3 text-sm text-zinc-400">
-                  {NETWORK_LABEL}{" "}
+                  {isolatedMainnetSetup
+                    ? "Mainnet"
+                    : NETWORK_LABEL}{" "}
                   balance:{" "}
                   <span className="font-bold text-zinc-100">
                     {networkBalance ===
@@ -744,7 +879,9 @@ export default function PlatformSetupPage() {
 
               <label className="block">
                 <span className="mb-2 block text-sm font-bold text-zinc-300">
-                  {NETWORK_LABEL}{" "}
+                  {isolatedMainnetSetup
+                    ? "Mainnet"
+                    : NETWORK_LABEL}{" "}
                   CPMM configuration
                 </span>
 
@@ -763,6 +900,7 @@ export default function PlatformSetupPage() {
                       )
                     }
                     disabled={
+                      isolatedMainnetSetup ||
                       !KODIAK_IS_DEVNET
                     }
                     className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-4 text-sm disabled:cursor-not-allowed disabled:opacity-40"
@@ -796,6 +934,7 @@ export default function PlatformSetupPage() {
                       )
                     }
                     disabled={
+                      isolatedMainnetSetup ||
                       !KODIAK_IS_DEVNET
                     }
                     placeholder={
@@ -833,15 +972,18 @@ export default function PlatformSetupPage() {
                     )
                   }
                   disabled={
-                    !KODIAK_IS_DEVNET
+                    !KODIAK_IS_DEVNET &&
+                    !isolatedMainnetSetup
                   }
                   className="mt-1 h-5 w-5 accent-emerald-400 disabled:opacity-40"
                 />
 
                 <span className="text-sm leading-6 text-zinc-400">
-                  {KODIAK_IS_DEVNET
-                    ? "I understand this creates a one-time on-chain configuration tied to my connected wallet and uses Devnet SOL."
-                    : "Mainnet PlatformConfig creation is locked until Kodiak's production configuration is intentionally enabled."}
+                  {isolatedMainnetSetup
+                    ? "I understand this creates Kodiak's one-time Mainnet PlatformConfig using real SOL, while the rest of Kodiak remains on Devnet."
+                    : KODIAK_IS_DEVNET
+                      ? "I understand this creates a one-time on-chain configuration tied to my connected wallet and uses Devnet SOL."
+                      : "Mainnet PlatformConfig creation is locked until Kodiak's production configuration is intentionally enabled."}
                 </span>
               </label>
 
@@ -863,9 +1005,11 @@ export default function PlatformSetupPage() {
                   {status.kind ===
                   "working"
                     ? "Waiting for transaction..."
-                    : KODIAK_IS_DEVNET
-                      ? "Create Kodiak Devnet Platform"
-                      : "Mainnet Setup Locked"}
+                    : isolatedMainnetSetup
+                      ? "Create Kodiak Mainnet Platform"
+                      : KODIAK_IS_DEVNET
+                        ? "Create Kodiak Devnet Platform"
+                        : "Mainnet Setup Locked"}
                 </button>
               )}
             </div>

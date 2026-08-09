@@ -3,8 +3,15 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
+
 import { LaunchChart } from "@/components/charts/LaunchChart";
+import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
+import {
+  KODIAK_NETWORK,
+  kodiakExplorerAddressUrl,
+  kodiakExplorerTransactionUrl,
+  kodiakNetworkLabel,
+} from "@/lib/solana/network";
 
 type LaunchRecord = {
   mint: string;
@@ -12,58 +19,143 @@ type LaunchRecord = {
   name: string;
   symbol: string;
   signature: string;
-  network: "devnet";
+  network?: string;
   createdAt: string;
 };
 
 type TokenPayload = {
   launch?: LaunchRecord;
+  network?: string;
   error?: string;
 };
 
-const short = (value: string) =>
-  value ? `${value.slice(0, 6)}...${value.slice(-6)}` : "-";
+const NETWORK_LABEL =
+  kodiakNetworkLabel();
 
-const formatDate = (value: string) => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unknown";
+const short = (
+  value: string,
+) =>
+  value
+    ? `${value.slice(
+        0,
+        6,
+      )}...${value.slice(
+        -6,
+      )}`
+    : "-";
+
+const formatDate = (
+  value: string,
+) => {
+  const date =
+    new Date(value);
+
+  if (
+    Number.isNaN(
+      date.getTime(),
+    )
+  ) {
+    return "Unknown";
+  }
+
   return date.toLocaleString();
 };
 
 export default function TokenPage() {
-  const { mint } = useParams<{ mint: string }>();
-  const [launch, setLaunch] = useState<LaunchRecord | null>(null);
-  const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
+  const { mint } =
+    useParams<{
+      mint: string;
+    }>();
+
+  const [
+    launch,
+    setLaunch,
+  ] =
+    useState<LaunchRecord | null>(
+      null,
+    );
+
+  const [
+    error,
+    setError,
+  ] = useState("");
+
+  const [
+    copied,
+    setCopied,
+  ] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelled =
+      false;
 
-    const load = async () => {
-      try {
-        const response = await fetch(
-          `/api/token/${encodeURIComponent(mint)}`,
-          { cache: "no-store" },
-        );
+    const load =
+      async () => {
+        try {
+          const response =
+            await fetch(
+              `/api/token/${encodeURIComponent(
+                mint,
+              )}`,
+              {
+                cache:
+                  "no-store",
+              },
+            );
 
-        const payload = (await response.json()) as TokenPayload;
+          const payload =
+            (await response.json()) as TokenPayload;
 
-        if (!response.ok || !payload.launch) {
-          throw new Error(payload.error || "Unable to load token.");
+          if (
+            !response.ok ||
+            !payload.launch
+          ) {
+            throw new Error(
+              payload.error ||
+                "Unable to load token.",
+            );
+          }
+
+          if (
+            payload.network &&
+            payload.network !==
+              KODIAK_NETWORK
+          ) {
+            throw new Error(
+              `Token API returned ${payload.network} data while Kodiak is configured for ${KODIAK_NETWORK}.`,
+            );
+          }
+
+          if (
+            payload.launch
+              .network &&
+            payload.launch
+              .network !==
+              KODIAK_NETWORK
+          ) {
+            throw new Error(
+              `This launch belongs to ${payload.launch.network}, not ${KODIAK_NETWORK}.`,
+            );
+          }
+
+          if (!cancelled) {
+            setLaunch(
+              payload.launch,
+            );
+
+            setError("");
+          }
+        } catch (caught) {
+          if (!cancelled) {
+            setError(
+              caught instanceof
+              Error
+                ? caught.message
+                : "Unable to load token.",
+            );
+          }
         }
-
-        if (!cancelled) {
-          setLaunch(payload.launch);
-          setError("");
-        }
-      } catch (caught) {
-        if (!cancelled) {
-          setError(
-            caught instanceof Error ? caught.message : "Unable to load token.",
-          );
-        }
-      }
-    };
+      };
 
     void load();
 
@@ -72,17 +164,30 @@ export default function TokenPage() {
     };
   }, [mint]);
 
-  const copyMint = async () => {
-    if (!launch?.mint) return;
+  const copyMint =
+    async () => {
+      if (!launch?.mint) {
+        return;
+      }
 
-    try {
-      await navigator.clipboard.writeText(launch.mint);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setCopied(false);
-    }
-  };
+      try {
+        await navigator.clipboard.writeText(
+          launch.mint,
+        );
+
+        setCopied(true);
+
+        window.setTimeout(
+          () =>
+            setCopied(
+              false,
+            ),
+          1500,
+        );
+      } catch {
+        setCopied(false);
+      }
+    };
 
   if (error) {
     return (
@@ -92,7 +197,11 @@ export default function TokenPage() {
             <p className="text-xs font-black uppercase tracking-[0.18em] text-red-300">
               Token unavailable
             </p>
-            <h1 className="mt-2 text-2xl font-black">{error}</h1>
+
+            <h1 className="mt-2 text-2xl font-black">
+              {error}
+            </h1>
+
             <div className="mt-5 flex flex-wrap gap-3">
               <Link
                 href="/"
@@ -100,6 +209,7 @@ export default function TokenPage() {
               >
                 Home
               </Link>
+
               <Link
                 href="/explore"
                 className="rounded-xl bg-emerald-400 px-4 py-3 text-sm font-black text-black"
@@ -118,7 +228,8 @@ export default function TokenPage() {
       <main className="min-h-screen bg-black px-4 py-8 text-zinc-400 sm:px-6">
         <div className="mx-auto max-w-7xl">
           <div className="animate-pulse rounded-3xl border border-white/10 bg-white/[0.03] p-8">
-            Loading Kodiak token...
+            Loading Kodiak
+            token...
           </div>
         </div>
       </main>
@@ -132,21 +243,34 @@ export default function TokenPage() {
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="min-w-0">
               <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-300">
-                Kodiak LaunchLab | Devnet
+                Kodiak LaunchLab
+                {" | "}
+                {NETWORK_LABEL}
               </p>
 
               <div className="mt-3 flex flex-wrap items-baseline gap-x-4 gap-y-2">
                 <h1 className="break-words text-4xl font-black sm:text-5xl">
                   {launch.name}
                 </h1>
+
                 <p className="text-2xl font-black text-amber-300">
-                  ${launch.symbol}
+                  $
+                  {
+                    launch.symbol
+                  }
                 </p>
               </div>
 
               <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-400">
-                Live Kodiak market data, real Devnet trades, creator identity,
-                and launch verification in one trading workspace.
+                Live Kodiak
+                market data, real{" "}
+                {NETWORK_LABEL}{" "}
+                trades, creator
+                identity, and
+                launch
+                verification in
+                one trading
+                workspace.
               </p>
             </div>
 
@@ -154,22 +278,47 @@ export default function TokenPage() {
           </div>
 
           <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            <InfoCard label="Mint" value={short(launch.mint)} mono />
-            <InfoCard label="Creator" value={short(launch.creator)} mono />
-            <InfoCard label="Launched" value={formatDate(launch.createdAt)} />
+            <InfoCard
+              label="Mint"
+              value={short(
+                launch.mint,
+              )}
+              mono
+            />
+
+            <InfoCard
+              label="Creator"
+              value={short(
+                launch.creator,
+              )}
+              mono
+            />
+
+            <InfoCard
+              label="Launched"
+              value={formatDate(
+                launch.createdAt,
+              )}
+            />
           </div>
 
           <div className="mt-5 flex flex-wrap gap-3">
             <button
               type="button"
-              onClick={() => void copyMint()}
+              onClick={() =>
+                void copyMint()
+              }
               className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-black transition hover:bg-white/[0.07]"
             >
-              {copied ? "Mint copied" : "Copy mint"}
+              {copied
+                ? "Mint copied"
+                : "Copy mint"}
             </button>
 
             <a
-              href={`https://explorer.solana.com/address/${launch.mint}?cluster=devnet`}
+              href={kodiakExplorerAddressUrl(
+                launch.mint,
+              )}
               target="_blank"
               rel="noreferrer"
               className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-black text-amber-300 transition hover:bg-white/[0.07]"
@@ -178,17 +327,24 @@ export default function TokenPage() {
             </a>
 
             <Link
-              href={`/trade?mint=${encodeURIComponent(launch.mint)}`}
+              href={`/trade?mint=${encodeURIComponent(
+                launch.mint,
+              )}`}
               className="rounded-xl bg-emerald-400 px-5 py-3 text-sm font-black text-black transition hover:bg-emerald-300"
             >
-              Trade on Devnet
+              Trade on{" "}
+              {NETWORK_LABEL}
             </Link>
           </div>
         </header>
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div className="min-w-0">
-            <LaunchChart mint={launch.mint} />
+            <LaunchChart
+              mint={
+                launch.mint
+              }
+            />
           </div>
 
           <aside className="space-y-5">
@@ -196,18 +352,30 @@ export default function TokenPage() {
               <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">
                 Trade
               </p>
+
               <h2 className="mt-2 text-2xl font-black">
-                Buy or sell ${launch.symbol}
+                Buy or sell $
+                {
+                  launch.symbol
+                }
               </h2>
+
               <p className="mt-3 text-sm leading-6 text-zinc-400">
-                Open the Kodiak Devnet trading panel with this token already
-                selected.
+                Open the Kodiak{" "}
+                {NETWORK_LABEL}{" "}
+                trading panel
+                with this token
+                already selected.
               </p>
+
               <Link
-                href={`/trade?mint=${encodeURIComponent(launch.mint)}`}
+                href={`/trade?mint=${encodeURIComponent(
+                  launch.mint,
+                )}`}
                 className="mt-5 block rounded-2xl bg-emerald-400 px-5 py-4 text-center font-black text-black"
               >
-                Open trading panel
+                Open trading
+                panel
               </Link>
             </section>
 
@@ -215,11 +383,17 @@ export default function TokenPage() {
               <p className="text-xs font-black uppercase tracking-[0.18em] text-amber-300">
                 Creator
               </p>
+
               <h2 className="mt-2 text-2xl font-black">
-                {short(launch.creator)}
+                {short(
+                  launch.creator,
+                )}
               </h2>
+
               <p className="mt-3 break-all font-mono text-xs leading-5 text-zinc-500">
-                {launch.creator}
+                {
+                  launch.creator
+                }
               </p>
 
               <div className="mt-5 grid gap-3">
@@ -229,11 +403,13 @@ export default function TokenPage() {
                 >
                   Creator setup
                 </Link>
+
                 <Link
                   href="/dashboard"
                   className="rounded-xl border border-white/10 px-4 py-3 text-center text-sm font-black text-emerald-300"
                 >
-                  Creator command center
+                  Creator command
+                  center
                 </Link>
               </div>
             </section>
@@ -242,36 +418,68 @@ export default function TokenPage() {
               <p className="text-xs font-black uppercase tracking-[0.18em] text-zinc-500">
                 Bonding progress
               </p>
-              <h2 className="mt-2 text-xl font-black">Indexer connection next</h2>
+
+              <h2 className="mt-2 text-xl font-black">
+                Indexer
+                connection next
+              </h2>
 
               <div className="mt-4 h-3 overflow-hidden rounded-full bg-white/[0.06]">
                 <div className="h-full w-0 rounded-full bg-gradient-to-r from-emerald-400 to-amber-300" />
               </div>
 
               <p className="mt-4 text-sm leading-6 text-zinc-500">
-                Kodiak will display verified SOL raised, remaining SOL, bonding
-                percentage, liquidity, holders, and market cap here once those
-                on-chain indexers are connected. No invented values are shown.
+                Kodiak will
+                display verified
+                SOL raised,
+                remaining SOL,
+                bonding
+                percentage,
+                liquidity,
+                holders, and
+                market cap here
+                once those
+                on-chain
+                indexers are
+                connected. No
+                invented values
+                are shown.
               </p>
             </section>
 
             <section className="rounded-3xl border border-white/10 bg-white/[0.025] p-5">
               <p className="text-xs font-black uppercase tracking-[0.18em] text-zinc-500">
-                Launch verification
+                Launch
+                verification
               </p>
+
               <div className="mt-4 space-y-3 text-sm">
-                <DetailRow label="Network" value="Solana Devnet" />
-                <DetailRow label="Status" value="Verified launch" />
-                <DetailRow label="Symbol" value={`$${launch.symbol}`} />
+                <DetailRow
+                  label="Network"
+                  value={`Solana ${NETWORK_LABEL}`}
+                />
+
+                <DetailRow
+                  label="Status"
+                  value="Verified launch"
+                />
+
+                <DetailRow
+                  label="Symbol"
+                  value={`$${launch.symbol}`}
+                />
               </div>
 
               <a
-                href={`https://explorer.solana.com/tx/${launch.signature}?cluster=devnet`}
+                href={kodiakExplorerTransactionUrl(
+                  launch.signature,
+                )}
                 target="_blank"
                 rel="noreferrer"
                 className="mt-5 block rounded-xl border border-white/10 px-4 py-3 text-center text-sm font-black text-zinc-300"
               >
-                View launch transaction
+                View launch
+                transaction
               </a>
             </section>
           </aside>
@@ -295,9 +503,12 @@ function InfoCard({
       <p className="text-[10px] font-black uppercase tracking-[0.14em] text-zinc-600">
         {label}
       </p>
+
       <p
         className={`mt-2 break-words text-sm font-black ${
-          mono ? "font-mono" : ""
+          mono
+            ? "font-mono"
+            : ""
         }`}
       >
         {value}
@@ -306,11 +517,22 @@ function InfoCard({
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+function DetailRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
   return (
     <div className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-black/25 px-4 py-3">
-      <span className="text-zinc-500">{label}</span>
-      <span className="text-right font-black text-zinc-200">{value}</span>
+      <span className="text-zinc-500">
+        {label}
+      </span>
+
+      <span className="text-right font-black text-zinc-200">
+        {value}
+      </span>
     </div>
   );
 }

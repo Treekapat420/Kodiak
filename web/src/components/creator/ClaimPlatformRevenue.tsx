@@ -413,6 +413,7 @@ export function ClaimPlatformRevenue() {
     if (
       !connected ||
       !publicKey ||
+      !signTransaction ||
       !signAllTransactions
     ) {
       setStatus({
@@ -456,6 +457,7 @@ export function ClaimPlatformRevenue() {
         await loadDevnetRaydium({
           connection,
           owner: publicKey,
+          signTransaction,
           signAllTransactions,
         });
 
@@ -638,7 +640,9 @@ export function ClaimPlatformRevenue() {
             Devnet accounting mode
           </p>
           <p className="mt-1 text-xs leading-5 text-zinc-400">
-            Kodiak is tracking the 5% Creator Success Fund allocation as pending during Devnet testing. Actual treasury transfers are disabled on Devnet and will activate on Mainnet.
+            Kodiak is tracking the 5% Creator Success Fund allocation as
+            pending during Devnet testing. Actual treasury transfers are
+            disabled on Devnet and will activate on Mainnet.
           </p>
           {pendingSol > 0 ? (
             <p className="mt-2 text-xs font-black text-amber-300">

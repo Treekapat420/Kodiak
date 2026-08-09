@@ -21,6 +21,7 @@ import {
 } from "@/lib/raydium/devnet";
 import {
   KODIAK_IS_DEVNET,
+  KODIAK_IS_MAINNET,
   kodiakExplorerTransactionUrl,
   kodiakNetworkLabel,
 } from "@/lib/solana/network";
@@ -53,6 +54,34 @@ const CREATOR_LP_SCALE = 100_000;
 const BURN_LP_SCALE = 900_000;
 
 const NETWORK_LABEL = kodiakNetworkLabel();
+
+const MAINNET_PLATFORM_ADMIN_WALLET =
+  process.env.NEXT_PUBLIC_KODIAK_PLATFORM_ADMIN_WALLET?.trim() ?? "";
+
+const MAINNET_PLATFORM_CLAIM_FEE_WALLET =
+  process.env.NEXT_PUBLIC_KODIAK_PLATFORM_CLAIM_FEE_WALLET?.trim() ?? "";
+
+const MAINNET_PLATFORM_LOCK_NFT_WALLET =
+  process.env.NEXT_PUBLIC_KODIAK_PLATFORM_LOCK_NFT_WALLET?.trim() ?? "";
+
+const MAINNET_TRANSFER_FEE_AUTH_WALLET =
+  process.env.NEXT_PUBLIC_KODIAK_TRANSFER_FEE_AUTH_WALLET?.trim() ?? "";
+
+function validConfiguredPublicKey(value: string) {
+  if (!value) return false;
+
+  try {
+    return new PublicKey(value).toBase58() === value;
+  } catch {
+    return false;
+  }
+}
+
+const MAINNET_AUTHORITY_CONFIG_READY =
+  validConfiguredPublicKey(MAINNET_PLATFORM_ADMIN_WALLET) &&
+  validConfiguredPublicKey(MAINNET_PLATFORM_CLAIM_FEE_WALLET) &&
+  validConfiguredPublicKey(MAINNET_PLATFORM_LOCK_NFT_WALLET) &&
+  validConfiguredPublicKey(MAINNET_TRANSFER_FEE_AUTH_WALLET);
 
 export default function PlatformSetupPage() {
   const { connection } = useConnection();
@@ -513,15 +542,14 @@ export default function PlatformSetupPage() {
               <p className="mt-2 text-sm leading-6 text-zinc-400">
                 {KODIAK_IS_DEVNET
                   ? "This setup page currently creates Kodiak's Raydium LaunchLab PlatformConfig on Devnet only. Your connected wallet will approve a test transaction."
-                  : "Kodiak will not create a Mainnet PlatformConfig from this page until the production CPMM configuration, wallets, and deployment settings have been intentionally enabled."}
+                  : "Kodiak will not create a Mainnet PlatformConfig from this page until the production CPMM configuration and explicit production authority wallets have been verified and intentionally enabled."}
               </p>
             </div>
 
             <div className="mt-7 space-y-5">
               <div>
                 <p className="text-sm font-bold text-zinc-400">
-                  Administrator and
-                  fee wallet
+                  Transaction signer
                 </p>
 
                 <p className="mt-2 break-all rounded-2xl bg-black/25 p-4 font-mono text-sm text-emerald-300">
@@ -556,6 +584,68 @@ export default function PlatformSetupPage() {
                     </p>
                   )}
               </div>
+
+              {KODIAK_IS_MAINNET && (
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
+                  <div className="flex items-center justify-between gap-4">
+                    <p className="font-black text-zinc-200">
+                      Production authority configuration
+                    </p>
+
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-black ${
+                        MAINNET_AUTHORITY_CONFIG_READY
+                          ? "bg-emerald-400/10 text-emerald-300"
+                          : "bg-amber-300/10 text-amber-300"
+                      }`}
+                    >
+                      {MAINNET_AUTHORITY_CONFIG_READY
+                        ? "READY"
+                        : "INCOMPLETE"}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 space-y-3 text-xs">
+                    {[
+                      [
+                        "Platform admin",
+                        MAINNET_PLATFORM_ADMIN_WALLET,
+                      ],
+                      [
+                        "Platform fee-claim wallet",
+                        MAINNET_PLATFORM_CLAIM_FEE_WALLET,
+                      ],
+                      [
+                        "Platform lock-NFT wallet",
+                        MAINNET_PLATFORM_LOCK_NFT_WALLET,
+                      ],
+                      [
+                        "Transfer-fee authority",
+                        MAINNET_TRANSFER_FEE_AUTH_WALLET,
+                      ],
+                    ].map(([label, value]) => (
+                      <div
+                        key={label}
+                        className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-3"
+                      >
+                        <p className="font-bold text-zinc-500">
+                          {label}
+                        </p>
+                        <p className="mt-1 break-all font-mono text-zinc-300">
+                          {value || "Not configured"}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <p className="mt-4 text-xs leading-5 text-zinc-500">
+                    Mainnet will not reuse the connected browser wallet as
+                    Kodiak&apos;s permanent authority by default. These addresses
+                    must be explicitly configured before Mainnet PlatformConfig
+                    creation is enabled.
+                  </p>
+                </div>
+              )}
 
               <label className="block">
                 <span className="mb-2 block text-sm font-bold text-zinc-300">

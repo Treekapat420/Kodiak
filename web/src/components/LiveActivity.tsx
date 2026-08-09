@@ -3,6 +3,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import {
+  KODIAK_NETWORK,
+  kodiakNetworkLabel,
+} from "@/lib/solana/network";
+
 type TradeActivity = {
   id: string;
   type: "trade";
@@ -43,6 +48,7 @@ type Trending = {
 };
 
 type Payload = {
+  network?: string;
   activity?: Activity[];
   trending?: Trending[];
   stats?: {
@@ -55,8 +61,10 @@ type Payload = {
   error?: string;
 };
 
+const NETWORK_LABEL = kodiakNetworkLabel();
+
 function shortAddress(value: string) {
-  return value ? `${value.slice(0, 4)}…${value.slice(-4)}` : "—";
+  return value ? `${value.slice(0, 4)}â¦${value.slice(-4)}` : "â";
 }
 
 function formatSol(value: number) {
@@ -78,7 +86,7 @@ function timeAgo(timestamp: number) {
 
 export function LiveActivity() {
   const [payload, setPayload] = useState<Payload>({});
-  const [status, setStatus] = useState("Connecting to Kodiak activity…");
+  const [status, setStatus] = useState("Connecting to Kodiak activityâ¦");
 
   useEffect(() => {
     let cancelled = false;
@@ -92,9 +100,20 @@ export function LiveActivity() {
           throw new Error(next.error || "Unable to load live activity.");
         }
 
+        if (
+          next.network &&
+          next.network !== KODIAK_NETWORK
+        ) {
+          throw new Error(
+            `Activity API returned ${next.network} data while Kodiak is configured for ${KODIAK_NETWORK}.`,
+          );
+        }
+
         if (!cancelled) {
           setPayload(next);
-          setStatus("Live Devnet data • refreshes every 8 seconds");
+          setStatus(
+            `Live ${NETWORK_LABEL} data â¢ refreshes every 8 seconds`,
+          );
         }
       } catch (error) {
         if (!cancelled) {
@@ -149,7 +168,7 @@ export function LiveActivity() {
             href="/explore"
             className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-black text-zinc-200 transition hover:border-emerald-400/40"
           >
-            Explore all →
+            Explore all â
           </Link>
         </div>
 
@@ -162,17 +181,17 @@ export function LiveActivity() {
           <Stat
             label="Recorded trades"
             value={String(stats.trades)}
-            hint="Devnet buys + sells"
+            hint={`${NETWORK_LABEL} buys + sells`}
           />
           <Stat
-            label="Devnet volume"
+            label={`${NETWORK_LABEL} volume`}
             value={`${formatSol(stats.volumeSol)} SOL`}
             hint="Recorded trade volume"
           />
           <Stat
             label="Buy pressure"
             value={stats.trades ? `${buyRatio}% buys` : "Waiting"}
-            hint={stats.trades ? `${stats.buys} buys • ${stats.sells} sells` : "No trades yet"}
+            hint={stats.trades ? `${stats.buys} buys â¢ ${stats.sells} sells` : "No trades yet"}
           />
         </div>
 
@@ -216,7 +235,7 @@ export function LiveActivity() {
                   Ranked from actual Kodiak trade activity
                 </p>
               </div>
-              <span className="text-2xl">🐻</span>
+              <span className="text-2xl">ð»</span>
             </div>
 
             <div className="mt-5 space-y-3">
@@ -261,7 +280,7 @@ export function LiveActivity() {
                         <MiniStat label="Sells" value={String(token.sells)} />
                         <MiniStat
                           label="Buy %"
-                          value={totalSides ? `${tokenBuyRatio}%` : "—"}
+                          value={totalSides ? `${tokenBuyRatio}%` : "â"}
                         />
                       </div>
                     </Link>
@@ -317,14 +336,14 @@ function ActivityRow({ item }: { item: Activity }) {
         className="flex items-center gap-3 border-b border-white/[0.06] px-5 py-4 transition hover:bg-white/[0.03]"
       >
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-300/10 text-lg">
-          🚀
+          ð
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-black">
             ${item.symbol} launched
           </p>
           <p className="mt-1 truncate text-xs text-zinc-600">
-            by {shortAddress(item.creator)} • {item.name}
+            by {shortAddress(item.creator)} â¢ {item.name}
           </p>
         </div>
         <span className="shrink-0 text-xs font-bold text-zinc-600">
@@ -359,7 +378,7 @@ function ActivityRow({ item }: { item: Activity }) {
           ${item.symbol}
         </p>
         <p className="mt-1 truncate text-xs text-zinc-600">
-          {shortAddress(item.wallet)} • {formatSol(item.solAmount)} SOL
+          {shortAddress(item.wallet)} â¢ {formatSol(item.solAmount)} SOL
         </p>
       </div>
 

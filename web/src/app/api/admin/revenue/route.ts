@@ -10,7 +10,7 @@ import {
 import { NextRequest, NextResponse } from "next/server";
 
 import { isKodiakAdminWallet } from "@/lib/admin";
-import { DEVNET_LAUNCHPAD_PROGRAM_ID } from "@/lib/raydium/devnet";
+import { KODIAK_LAUNCHPAD_PROGRAM_ID } from "@/lib/raydium/devnet";
 import {
   KODIAK_IS_DEVNET,
   KODIAK_NETWORK,
@@ -440,7 +440,7 @@ export async function POST(
 
       const platformVault =
         getPdaPlatformVault(
-          DEVNET_LAUNCHPAD_PROGRAM_ID,
+          KODIAK_LAUNCHPAD_PROGRAM_ID,
           platformId,
           NATIVE_MINT,
         ).publicKey;

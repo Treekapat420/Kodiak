@@ -180,7 +180,6 @@ export default function TradePage() {
       if (!platformAccount) throw new Error("The LaunchLab PlatformConfig account was not found on Devnet.");
       const platformInfo = PlatformConfig.decode(platformAccount.data);
       const mintInfo = await raydium.token.getTokenInfo(mintA);
-  
       const { transaction, extInfo, execute } = await raydium.launchpad.buyToken({
         programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
         mintA,
@@ -232,9 +231,7 @@ export default function TradePage() {
       if (!platformAccount) throw new Error("The LaunchLab PlatformConfig account was not found on Devnet.");
       const platformInfo = PlatformConfig.decode(platformAccount.data);
       const mintInfo = await raydium.token.getTokenInfo(mintA);
-      
-      const { transaction, extInfo, execute } = 
-        await raydium.launchpad.sellToken({
+      const { transaction, extInfo, execute } = await raydium.launchpad.sellToken({
         programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
         mintA,
         mintAProgram: new PublicKey(mintInfo.programId),
@@ -245,6 +242,7 @@ export default function TradePage() {
         txVersion: TxVersion.V0,
         feePayer: publicKey,
         sellAmount: rawSellAmount,
+        minAmountB: new BN(0),
         slippage: new BN(100),
       });
       const estimatedLamports = Number(extInfo.outAmount.toString());
@@ -296,7 +294,7 @@ export default function TradePage() {
             <span className="mb-2 block text-sm font-bold text-zinc-300">Token mint</span>
             <input value={mintText} onChange={(event) => { setMintText(event.target.value); setPoolIdText(""); setEstimatedTokens(null); setEstimatedSellSol(null); setSellTokens(""); }} placeholder="Paste a Devnet LaunchLab mint" className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 font-mono text-sm outline-none focus:border-emerald-400/50" />
           </label>
-          {(tokenName || tokenSymbol) && <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4"><p className="font-black">{tokenName || "Kodiak launch"}{tokenSymbol ? ` Â· ${symbolLabel}` : ""}</p></div>}
+          {(tokenName || tokenSymbol) && <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4"><p className="font-black">{tokenName || "Kodiak launch"}{tokenSymbol ? ` - ${symbolLabel}` : ""}</p></div>}
           <button type="button" onClick={() => void loadPool()} disabled={status.kind === "working" || !connected || !mintIsValid} className="mt-5 w-full rounded-2xl border border-emerald-400/30 px-5 py-4 font-black text-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">Load Devnet Bonding Curve</button>
         </section>
 
@@ -307,13 +305,13 @@ export default function TradePage() {
           </div>
 
           {tradeMode === "buy" ? <>
-            <div className="flex items-center justify-between gap-4"><h2 className="text-2xl font-black">Buy with Devnet SOL</h2><p className="text-sm text-zinc-400">Wallet: {publicKey ? walletSol ?? "Loading..." : "â"} SOL</p></div>
+            <div className="flex items-center justify-between gap-4"><h2 className="text-2xl font-black">Buy with Devnet SOL</h2><p className="text-sm text-zinc-400">Wallet: {publicKey ? walletSol ?? "Loading..." : "-"} SOL</p></div>
             <input inputMode="decimal" value={buySol} onChange={(event) => setBuySol(event.target.value)} className="mt-5 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-2xl font-black outline-none focus:border-emerald-400/50" />
             <div className="mt-3 grid grid-cols-4 gap-2">{["0.001", "0.01", "0.05", "0.1"].map((amount) => <button key={amount} type="button" onClick={() => setBuySol(amount)} className="rounded-xl border border-white/10 bg-black/30 px-2 py-3 text-sm font-bold">{amount}</button>)}</div>
             <p className="mt-4 text-xs leading-5 text-zinc-500">Slippage is fixed at 1% for this Devnet test.</p>
             <button type="button" onClick={() => void buyToken()} disabled={status.kind === "working" || !connected || !mintIsValid} className="mt-5 w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:opacity-40">{status.kind === "working" ? "Preparing Devnet buy..." : "Buy on Bonding Curve"}</button>
           </> : <>
-            <div className="flex items-center justify-between gap-4"><div><h2 className="text-2xl font-black">Sell {symbolLabel}</h2><p className="mt-1 text-xs text-zinc-500">Sell tokens back into the Raydium LaunchLab bonding curve.</p></div><div className="text-right"><p className="text-xs text-zinc-500">Token balance</p><p className="text-sm font-black text-emerald-300">{publicKey ? tokenBalance === null ? "Loading..." : tokenBalance.toLocaleString(undefined, { maximumFractionDigits: 6 }) : "â"}</p></div></div>
+            <div className="flex items-center justify-between gap-4"><div><h2 className="text-2xl font-black">Sell {symbolLabel}</h2><p className="mt-1 text-xs text-zinc-500">Sell tokens back into the Raydium LaunchLab bonding curve.</p></div><div className="text-right"><p className="text-xs text-zinc-500">Token balance</p><p className="text-sm font-black text-emerald-300">{publicKey ? tokenBalance === null ? "Loading..." : tokenBalance.toLocaleString(undefined, { maximumFractionDigits: 6 }) : "-"}</p></div></div>
             <input inputMode="decimal" value={sellTokens} onChange={(event) => setSellTokens(event.target.value)} placeholder="0" className="mt-5 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-2xl font-black outline-none focus:border-rose-400/50" />
             <div className="mt-3 grid grid-cols-4 gap-2">{[["25%", .25], ["50%", .5], ["75%", .75], ["MAX", 1]].map(([label, percent]) => <button key={String(label)} type="button" onClick={() => setSellPercent(Number(percent))} disabled={tokenBalance === null || tokenBalance <= 0} className="rounded-xl border border-white/10 bg-black/30 px-2 py-3 text-sm font-bold disabled:opacity-40">{String(label)}</button>)}</div>
             <p className="mt-4 text-xs leading-5 text-zinc-500">Slippage is fixed at 1% for this Devnet test.</p>

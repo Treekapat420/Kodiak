@@ -22,6 +22,8 @@ import {
 import {
   KODIAK_IS_DEVNET,
   KODIAK_IS_MAINNET,
+  KODIAK_MAINNET_CPMM_CONFIG_ID,
+  KODIAK_MAINNET_REQUESTED_BUT_LOCKED,
   kodiakExplorerTransactionUrl,
   kodiakNetworkLabel,
 } from "@/lib/solana/network";
@@ -118,9 +120,11 @@ export default function PlatformSetupPage() {
     setStatus,
   ] = useState<SetupStatus>({
     kind: "idle",
-    message: KODIAK_IS_DEVNET
-      ? "Ready for Devnet configuration."
-      : "Mainnet Platform Setup is locked until Kodiak's production configuration is intentionally prepared.",
+    message: KODIAK_MAINNET_REQUESTED_BUT_LOCKED
+      ? "Mainnet is requested, but Kodiak is safely locked to Devnet until the explicit Mainnet enable flag is turned on."
+      : KODIAK_IS_DEVNET
+        ? "Ready for Devnet configuration."
+        : "Mainnet Platform Setup is locked until Kodiak's production configuration is intentionally prepared.",
   });
 
   useEffect(() => {
@@ -507,8 +511,9 @@ export default function PlatformSetupPage() {
         <div className="flex flex-col justify-between gap-5 sm:flex-row">
           <div>
             <p className="text-sm font-black uppercase tracking-[0.24em] text-emerald-300">
-              {NETWORK_LABEL}{" "}
-              launch engine
+              {KODIAK_MAINNET_REQUESTED_BUT_LOCKED
+                ? "Mainnet requested Â· Devnet safe mode"
+                : `${NETWORK_LABEL} launch engine`}
             </p>
 
             <h1 className="mt-3 text-4xl font-black sm:text-5xl">
@@ -516,9 +521,11 @@ export default function PlatformSetupPage() {
             </h1>
 
             <p className="mt-4 max-w-2xl leading-7 text-zinc-400">
-              {KODIAK_IS_DEVNET
-                ? "Create Kodiak's one-time Raydium LaunchLab PlatformConfig using test-network SOL only."
-                : "Production PlatformConfig creation is intentionally locked until Kodiak's Mainnet configuration has been fully verified."}
+              {KODIAK_MAINNET_REQUESTED_BUT_LOCKED
+                ? "Mainnet has been requested in production configuration, but Kodiak remains locked to Devnet until the separate Mainnet enable flag is intentionally activated."
+                : KODIAK_IS_DEVNET
+                  ? "Create Kodiak's one-time Raydium LaunchLab PlatformConfig using test-network SOL only."
+                  : "Production PlatformConfig creation is intentionally locked until Kodiak's Mainnet configuration has been fully verified."}
             </p>
           </div>
 
@@ -534,15 +541,19 @@ export default function PlatformSetupPage() {
           <section className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-6 sm:p-8">
             <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-5">
               <p className="font-black text-amber-300">
-                {KODIAK_IS_DEVNET
-                  ? "Devnet only"
-                  : "Mainnet locked"}
+                {KODIAK_MAINNET_REQUESTED_BUT_LOCKED
+                  ? "Mainnet requested â locked"
+                  : KODIAK_IS_DEVNET
+                    ? "Devnet only"
+                    : "Mainnet locked"}
               </p>
 
               <p className="mt-2 text-sm leading-6 text-zinc-400">
-                {KODIAK_IS_DEVNET
-                  ? "This setup page currently creates Kodiak's Raydium LaunchLab PlatformConfig on Devnet only. Your connected wallet will approve a test transaction."
-                  : "Kodiak will not create a Mainnet PlatformConfig from this page until the production CPMM configuration and explicit production authority wallets have been verified and intentionally enabled."}
+                {KODIAK_MAINNET_REQUESTED_BUT_LOCKED
+                  ? "The production environment is requesting Mainnet, but Kodiak's second safety gate is still closed. No Mainnet PlatformConfig transaction can be created from this page."
+                  : KODIAK_IS_DEVNET
+                    ? "This setup page currently creates Kodiak's Raydium LaunchLab PlatformConfig on Devnet only. Your connected wallet will approve a test transaction."
+                    : "Kodiak will not create a Mainnet PlatformConfig from this page until the production CPMM configuration and explicit production authority wallets have been verified and intentionally enabled."}
               </p>
             </div>
 
@@ -585,7 +596,8 @@ export default function PlatformSetupPage() {
                   )}
               </div>
 
-              {KODIAK_IS_MAINNET && (
+              {(KODIAK_IS_MAINNET ||
+                KODIAK_MAINNET_REQUESTED_BUT_LOCKED) && (
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
                   <div className="flex items-center justify-between gap-4">
                     <p className="font-black text-zinc-200">
@@ -603,6 +615,18 @@ export default function PlatformSetupPage() {
                         ? "READY"
                         : "INCOMPLETE"}
                     </span>
+                  </div>
+
+                  <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.04] p-3">
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-emerald-300">
+                      Verified Mainnet CPMM config
+                    </p>
+                    <p className="mt-2 break-all font-mono text-xs text-zinc-200">
+                      {KODIAK_MAINNET_CPMM_CONFIG_ID}
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-zinc-500">
+                      Raydium Mainnet CPMM index 0 Â· 0.25% trading fee tier.
+                    </p>
                   </div>
 
                   <div className="mt-4 space-y-3 text-xs">

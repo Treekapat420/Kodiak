@@ -49,6 +49,13 @@ type SetupStatus =
       logs?: string[];
     };
 
+type PlatformAuthorities = {
+  platformAdmin: PublicKey;
+  platformClaimFeeWallet: PublicKey;
+  platformLockNftWallet: PublicKey;
+  transferFeeExtensionAuth: PublicKey;
+};
+
 const PLATFORM_FEE_RATE = 5_000;
 const CREATOR_FEE_RATE = 4_500;
 const PLATFORM_LP_SCALE = 0;
@@ -84,6 +91,32 @@ const MAINNET_AUTHORITY_CONFIG_READY =
   validConfiguredPublicKey(MAINNET_PLATFORM_CLAIM_FEE_WALLET) &&
   validConfiguredPublicKey(MAINNET_PLATFORM_LOCK_NFT_WALLET) &&
   validConfiguredPublicKey(MAINNET_TRANSFER_FEE_AUTH_WALLET);
+
+const MAINNET_CPMM_CONFIG_READY =
+  validConfiguredPublicKey(KODIAK_MAINNET_CPMM_CONFIG_ID);
+
+function getMainnetAuthorities(): PlatformAuthorities {
+  if (!MAINNET_AUTHORITY_CONFIG_READY) {
+    throw new Error(
+      "Kodiak Mainnet authority configuration is incomplete.",
+    );
+  }
+
+  return {
+    platformAdmin: new PublicKey(
+      MAINNET_PLATFORM_ADMIN_WALLET,
+    ),
+    platformClaimFeeWallet: new PublicKey(
+      MAINNET_PLATFORM_CLAIM_FEE_WALLET,
+    ),
+    platformLockNftWallet: new PublicKey(
+      MAINNET_PLATFORM_LOCK_NFT_WALLET,
+    ),
+    transferFeeExtensionAuth: new PublicKey(
+      MAINNET_TRANSFER_FEE_AUTH_WALLET,
+    ),
+  };
+}
 
 export default function PlatformSetupPage() {
   const { connection } = useConnection();
@@ -172,14 +205,16 @@ export default function PlatformSetupPage() {
     let cancelled = false;
 
     async function loadConfigs() {
-      if (!KODIAK_IS_DEVNET) {
+      if (KODIAK_IS_MAINNET) {
         setConfigOptions([]);
-        setCpConfigId("");
+        setCpConfigId(
+          KODIAK_MAINNET_CPMM_CONFIG_ID,
+        );
 
         setStatus({
           kind: "idle",
           message:
-            "Mainnet Platform Setup is intentionally locked. Kodiak will not reuse Devnet CPMM configuration discovery on Mainnet.",
+            "Kodiak's verified Mainnet CPMM configuration is loaded, but Mainnet PlatformConfig creation remains locked.",
         });
 
         return;
@@ -252,6 +287,13 @@ export default function PlatformSetupPage() {
       false;
   }
 
+  /*
+   * IMPORTANT:
+   * Mainnet creation is still intentionally disabled here.
+   *
+   * The Mainnet parameters below are fully prepared, but canCreate remains
+   * Devnet-only until Kodiak completes the final production review.
+   */
   const canCreate =
     KODIAK_IS_DEVNET &&
     connected &&
@@ -264,11 +306,16 @@ export default function PlatformSetupPage() {
       "working";
 
   async function createPlatform() {
+    /*
+     * Keep this hard guard in place until the final Mainnet activation step.
+     * Merely requesting Mainnet or configuring production wallets cannot
+     * create a real Mainnet PlatformConfig.
+     */
     if (!KODIAK_IS_DEVNET) {
       setStatus({
         kind: "error",
         message:
-          "Mainnet Platform Setup is not enabled yet.",
+          "Mainnet Platform Setup is still transaction-locked.",
       });
       return;
     }
@@ -289,16 +336,42 @@ export default function PlatformSetupPage() {
     });
 
     try {
-      let cpConfig: PublicKey;
+      const cpConfig =
+        KODIAK_IS_MAINNET
+          ? new PublicKey(
+              KODIAK_MAINNET_CPMM_CONFIG_ID,
+            )
+          : new PublicKey(
+              cpConfigId,
+            );
 
-      try {
-        cpConfig =
-          new PublicKey(
-            cpConfigId,
-          );
-      } catch {
+      const authorities:
+        PlatformAuthorities =
+        KODIAK_IS_MAINNET
+          ? getMainnetAuthorities()
+          : {
+              platformAdmin:
+                publicKey,
+              platformClaimFeeWallet:
+                publicKey,
+              platformLockNftWallet:
+                publicKey,
+              transferFeeExtensionAuth:
+                publicKey,
+            };
+
+      /*
+       * When Mainnet is eventually unlocked, the connected transaction
+       * signer must be Kodiak's configured platform admin.
+       */
+      if (
+        KODIAK_IS_MAINNET &&
+        !publicKey.equals(
+          authorities.platformAdmin,
+        )
+      ) {
         throw new Error(
-          "The selected CPMM configuration is not a valid Solana public key.",
+          "Connect the configured Kodiak Mainnet platform-admin wallet before creating the PlatformConfig.",
         );
       }
 
@@ -321,17 +394,17 @@ export default function PlatformSetupPage() {
             programId:
               KODIAK_LAUNCHPAD_PROGRAM_ID,
             platformAdmin:
-              publicKey,
+              authorities.platformAdmin,
             platformClaimFeeWallet:
-              publicKey,
+              authorities.platformClaimFeeWallet,
             platformLockNftWallet:
-              publicKey,
+              authorities.platformLockNftWallet,
             platformVestingWallet:
               PublicKey.default,
             cpConfigId:
               cpConfig,
             transferFeeExtensionAuth:
-              publicKey,
+              authorities.transferFeeExtensionAuth,
             creatorFeeRate:
               new BN(
                 CREATOR_FEE_RATE,
@@ -432,14 +505,10 @@ export default function PlatformSetupPage() {
       const platformId =
         extInfo.platformId.toBase58();
 
-      /*
-       * Keep the existing Devnet browser key intact because older Kodiak
-       * screens and previous test sessions may still read it.
-       *
-       * Launch itself now gets the canonical PlatformConfig from /api/config.
-       */
       window.localStorage.setItem(
-        "kodiak-devnet-platform-id",
+        KODIAK_IS_MAINNET
+          ? "kodiak-mainnet-platform-id"
+          : "kodiak-devnet-platform-id",
         platformId,
       );
 
@@ -512,7 +581,7 @@ export default function PlatformSetupPage() {
           <div>
             <p className="text-sm font-black uppercase tracking-[0.24em] text-emerald-300">
               {KODIAK_MAINNET_REQUESTED_BUT_LOCKED
-                ? "Mainnet requested Â· Devnet safe mode"
+                ? "Mainnet requested - Devnet safe mode"
                 : `${NETWORK_LABEL} launch engine`}
             </p>
 
@@ -542,7 +611,7 @@ export default function PlatformSetupPage() {
             <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-5">
               <p className="font-black text-amber-300">
                 {KODIAK_MAINNET_REQUESTED_BUT_LOCKED
-                  ? "Mainnet requested â locked"
+                  ? "Mainnet requested - locked"
                   : KODIAK_IS_DEVNET
                     ? "Devnet only"
                     : "Mainnet locked"}
@@ -606,12 +675,14 @@ export default function PlatformSetupPage() {
 
                     <span
                       className={`rounded-full px-3 py-1 text-xs font-black ${
-                        MAINNET_AUTHORITY_CONFIG_READY
+                        MAINNET_AUTHORITY_CONFIG_READY &&
+                        MAINNET_CPMM_CONFIG_READY
                           ? "bg-emerald-400/10 text-emerald-300"
                           : "bg-amber-300/10 text-amber-300"
                       }`}
                     >
-                      {MAINNET_AUTHORITY_CONFIG_READY
+                      {MAINNET_AUTHORITY_CONFIG_READY &&
+                      MAINNET_CPMM_CONFIG_READY
                         ? "READY"
                         : "INCOMPLETE"}
                     </span>
@@ -625,7 +696,7 @@ export default function PlatformSetupPage() {
                       {KODIAK_MAINNET_CPMM_CONFIG_ID}
                     </p>
                     <p className="mt-2 text-xs leading-5 text-zinc-500">
-                      Raydium Mainnet CPMM index 0 Â· 0.25% trading fee tier.
+                      Raydium Mainnet CPMM index 0 - 0.25% trading fee tier.
                     </p>
                   </div>
 
@@ -663,10 +734,10 @@ export default function PlatformSetupPage() {
                   </div>
 
                   <p className="mt-4 text-xs leading-5 text-zinc-500">
-                    Mainnet will not reuse the connected browser wallet as
-                    Kodiak&apos;s permanent authority by default. These addresses
-                    must be explicitly configured before Mainnet PlatformConfig
-                    creation is enabled.
+                    Mainnet will use these explicit production authorities
+                    instead of copying whichever browser wallet happens to be
+                    connected. The connected signer must match the configured
+                    platform-admin wallet before creation can occur.
                   </p>
                 </div>
               )}
@@ -730,7 +801,7 @@ export default function PlatformSetupPage() {
                     placeholder={
                       KODIAK_IS_DEVNET
                         ? "Paste a Devnet CPMM config ID"
-                        : "Mainnet setup locked"
+                        : "Verified Mainnet CPMM config"
                     }
                     className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-4 text-sm disabled:cursor-not-allowed disabled:opacity-40"
                   />

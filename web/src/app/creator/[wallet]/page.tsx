@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
+import { PublicProfileEditor } from "@/components/creator/PublicProfileEditor";
 import {
   KODIAK_NETWORK,
   kodiakExplorerAddressUrl,
@@ -33,6 +34,13 @@ type PublicLaunch = {
 
 type PublicProfile = {
   wallet: string;
+  displayName: string;
+  username: string;
+  bio: string;
+  avatarUrl: string;
+  xUrl: string;
+  telegramUrl: string;
+  websiteUrl: string;
   foundingCreator: FoundingCreator;
   launches: PublicLaunch[];
   totals: {
@@ -324,19 +332,13 @@ export default function PublicCreatorProfilePage() {
                 </p>
 
                 <div className="mt-4 flex flex-wrap items-center gap-4">
-                  <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-3xl border border-amber-300/30 bg-amber-300/10 text-2xl font-black text-amber-300">
-                    {profile.wallet.slice(
-                      0,
-                      2,
-                    )}
+                  <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-3xl border border-amber-300/30 bg-amber-300/10 text-2xl font-black text-amber-300">
+                    {profile.avatarUrl ? <img src={profile.avatarUrl} alt="Creator profile" className="h-full w-full object-cover" /> : profile.wallet.slice(0, 2)}
                   </div>
 
                   <div className="min-w-0">
-                    <h1 className="text-3xl font-black sm:text-5xl">
-                      {shortAddress(
-                        profile.wallet,
-                      )}
-                    </h1>
+                    <h1 className="text-3xl font-black sm:text-5xl">{profile.displayName || shortAddress(profile.wallet)}</h1>
+                    {profile.username && <p className="mt-1 font-bold text-emerald-300">@{profile.username}</p>}
 
                     <p className="mt-2 break-all font-mono text-xs leading-5 text-zinc-500">
                       {
@@ -345,6 +347,14 @@ export default function PublicCreatorProfilePage() {
                     </p>
                   </div>
                 </div>
+
+                {profile.bio && <p className="mt-5 max-w-2xl text-sm leading-6 text-zinc-300">{profile.bio}</p>}
+                <div className="mt-4 flex flex-wrap gap-3 text-sm font-black text-amber-300">
+                  {profile.websiteUrl && <a href={profile.websiteUrl} target="_blank" rel="noreferrer">Website</a>}
+                  {profile.xUrl && <a href={profile.xUrl} target="_blank" rel="noreferrer">X</a>}
+                  {profile.telegramUrl && <a href={profile.telegramUrl} target="_blank" rel="noreferrer">Telegram</a>}
+                </div>
+                <PublicProfileEditor wallet={profile.wallet} initial={{ displayName:profile.displayName, username:profile.username, bio:profile.bio, avatarUrl:profile.avatarUrl, xUrl:profile.xUrl, telegramUrl:profile.telegramUrl, websiteUrl:profile.websiteUrl }} onSaved={(meta)=>setProfile(current=>current?{...current,...meta}:current)} />
 
                 {founding.isFoundingCreator && (
                   <div className="mt-5 inline-flex items-center gap-3 rounded-2xl border border-amber-300/40 bg-amber-300/[0.08] px-4 py-3 text-sm font-black text-amber-300">

@@ -502,56 +502,385 @@ export async function GET(
 
 
 function cleanText(value: unknown, max: number) {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
+  return typeof value === "string"
+    ? value.trim().slice(0, max)
+    : "";
 }
 
 function cleanUrl(value: unknown, max = 300) {
   const text = cleanText(value, max);
-  if (!text) return "";
+
+  if (!text) {
+    return "";
+  }
+
   try {
     const url = new URL(text);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : "";
-  } catch { return ""; }
+
+    return url.protocol === "https:" ||
+      url.protocol === "http:"
+      ? url.toString()
+      : "";
+  } catch {
+    return "";
+  }
 }
 
-export async function PUT(request: NextRequest, context: Context) {
+const PINATA_FILE_URL =
+  "https://api.pinata.cloud/pinning/pinFileToIPFS";
+
+const PUBLIC_GATEWAY =
+  "https://gateway.pinata.cloud/ipfs";
+
+const MAX_PROFILE_IMAGE_BYTES =
+  5 * 1024 * 1024;
+
+type PinataResponse = {
+  IpfsHash?: string;
+  error?: string;
+};
+
+async function uploadProfileImage(
+  wallet: string,
+  image: File,
+) {
+  const jwt =
+    process.env.PINATA_JWT;
+
+  if (!jwt) {
+    throw new Error(
+      "Profile image storage is not configured. PINATA_JWT is missing.",
+    );
+  }
+
+  if (
+    !image.type.startsWith(
+      "image/",
+    )
+  ) {
+    throw new Error(
+      "Profile picture must be an image.",
+    );
+  }
+
+  if (
+    image.size >
+    MAX_PROFILE_IMAGE_BYTES
+  ) {
+    throw new Error(
+      "Profile picture must be 5 MB or smaller.",
+    );
+  }
+
+  const upload =
+    new FormData();
+
+  upload.append(
+    "file",
+    image,
+    image.name ||
+      "creator-profile-image",
+  );
+
+  upload.append(
+    "pinataMetadata",
+    JSON.stringify({
+      name:
+        `Kodiak creator ${wallet} profile image`,
+    }),
+  );
+
+  const response =
+    await fetch(
+      PINATA_FILE_URL,
+      {
+        method:
+          "POST",
+        headers: {
+          Authorization:
+            `Bearer ${jwt}`,
+        },
+        body:
+          upload,
+      },
+    );
+
+  const payload =
+    (await response.json()) as PinataResponse;
+
+  if (
+    !response.ok ||
+    !payload.IpfsHash
+  ) {
+    throw new Error(
+      payload.error ||
+        `Profile image upload failed with HTTP ${response.status}.`,
+    );
+  }
+
+  return `${PUBLIC_GATEWAY}/${payload.IpfsHash}`;
+}
+
+async function readProfileUpdate(
+  request: NextRequest,
+) {
+  const contentType =
+    request.headers.get(
+      "content-type",
+    ) ?? "";
+
+  if (
+    contentType.includes(
+      "multipart/form-data",
+    )
+  ) {
+    const incoming =
+      await request.formData();
+
+    const body:
+      Record<string, unknown> =
+      {};
+
+    [
+      "displayName",
+      "username",
+      "bio",
+      "avatarUrl",
+      "xUrl",
+      "telegramUrl",
+      "websiteUrl",
+      "nonce",
+      "message",
+      "signature",
+    ].forEach(
+      (key) => {
+        const value =
+          incoming.get(
+            key,
+          );
+
+        if (
+          typeof value ===
+          "string"
+        ) {
+          body[key] =
+            value;
+        }
+      },
+    );
+
+    const possibleImage =
+      incoming.get(
+        "avatar",
+      );
+
+    return {
+      body,
+      image:
+        possibleImage instanceof
+          File &&
+        possibleImage.size >
+          0
+          ? possibleImage
+          : null,
+    };
+  }
+
+  return {
+    body:
+      (await request.json()) as Record<
+        string,
+        unknown
+      >,
+    image:
+      null as File | null,
+  };
+}
+
+export async function PUT(
+  request: NextRequest,
+  context: Context,
+) {
   try {
-    const { wallet: rawWallet } = await context.params;
-    const wallet = new PublicKey(rawWallet).toBase58();
-    const body = await request.json() as Record<string, unknown>;
-    const nonce = cleanText(body.nonce, 100);
-    const message = cleanText(body.message, 1000);
-    const signature = cleanText(body.signature, 500);
-    if (!nonce || !message || !signature) {
-      return NextResponse.json({ error: "Wallet signature is required." }, { status: 401 });
+    const {
+      wallet: rawWallet,
+    } =
+      await context.params;
+
+    const wallet =
+      new PublicKey(
+        rawWallet,
+      ).toBase58();
+
+    const {
+      body,
+      image,
+    } =
+      await readProfileUpdate(
+        request,
+      );
+
+    const nonce =
+      cleanText(
+        body.nonce,
+        100,
+      );
+
+    const message =
+      cleanText(
+        body.message,
+        1000,
+      );
+
+    const signature =
+      cleanText(
+        body.signature,
+        500,
+      );
+
+    if (
+      !nonce ||
+      !message ||
+      !signature
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Wallet signature is required.",
+        },
+        {
+          status: 401,
+        },
+      );
     }
 
-    const redisClient = getRedis();
-    const nonceKey = creatorProfileNonceKey(wallet, nonce);
-    const expected = await redisClient.get<string>(nonceKey);
-    if (!expected || expected !== message) {
-      return NextResponse.json({ error: "This edit authorization expired. Please sign again." }, { status: 401 });
-    }
-    if (!verifySolanaMessage(wallet, message, signature)) {
-      return NextResponse.json({ error: "Wallet signature could not be verified." }, { status: 401 });
+    const redisClient =
+      getRedis();
+
+    const nonceKey =
+      creatorProfileNonceKey(
+        wallet,
+        nonce,
+      );
+
+    const expected =
+      await redisClient.get<string>(
+        nonceKey,
+      );
+
+    if (
+      !expected ||
+      expected !==
+        message
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This edit authorization expired. Please sign again.",
+        },
+        {
+          status: 401,
+        },
+      );
     }
 
-    const username = cleanText(body.username, 24).replace(/[^a-zA-Z0-9_]/g, "");
-    const profile: CreatorProfileMeta = {
-      displayName: cleanText(body.displayName, 50),
+    if (
+      !verifySolanaMessage(
+        wallet,
+        message,
+        signature,
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Wallet signature could not be verified.",
+        },
+        {
+          status: 401,
+        },
+      );
+    }
+
+    const username =
+      cleanText(
+        body.username,
+        24,
+      ).replace(
+        /[^a-zA-Z0-9_]/g,
+        "",
+      );
+
+    const avatarUrl =
+      image
+        ? await uploadProfileImage(
+            wallet,
+            image,
+          )
+        : cleanUrl(
+            body.avatarUrl,
+          );
+
+    const profile:
+      CreatorProfileMeta = {
+      displayName:
+        cleanText(
+          body.displayName,
+          50,
+        ),
       username,
-      bio: cleanText(body.bio, 280),
-      avatarUrl: cleanUrl(body.avatarUrl),
-      xUrl: cleanUrl(body.xUrl),
-      telegramUrl: cleanUrl(body.telegramUrl),
-      websiteUrl: cleanUrl(body.websiteUrl),
-      updatedAt: new Date().toISOString(),
+      bio:
+        cleanText(
+          body.bio,
+          280,
+        ),
+      avatarUrl,
+      xUrl:
+        cleanUrl(
+          body.xUrl,
+        ),
+      telegramUrl:
+        cleanUrl(
+          body.telegramUrl,
+        ),
+      websiteUrl:
+        cleanUrl(
+          body.websiteUrl,
+        ),
+      updatedAt:
+        new Date().toISOString(),
     };
 
-    await redisClient.set(creatorProfileKey(wallet), profile);
-    await redisClient.del(nonceKey);
-    return NextResponse.json({ ok: true, network: KODIAK_NETWORK, profile });
+    await redisClient.set(
+      creatorProfileKey(
+        wallet,
+      ),
+      profile,
+    );
+
+    await redisClient.del(
+      nonceKey,
+    );
+
+    return NextResponse.json({
+      ok:
+        true,
+      network:
+        KODIAK_NETWORK,
+      profile,
+    });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to update creator profile." }, { status: 500 });
+    return NextResponse.json(
+      {
+        error:
+          error instanceof
+          Error
+            ? error.message
+            : "Unable to update creator profile.",
+      },
+      {
+        status: 500,
+      },
+    );
   }
 }

@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@jup-ag/wallet-adapter": "^0.2.3",
     "@raydium-io/raydium-sdk-v2": "0.2.42-alpha",
     "@solana/spl-token": "^0.4.15",
     "@solana/wallet-adapter-base": "^0.9.27",

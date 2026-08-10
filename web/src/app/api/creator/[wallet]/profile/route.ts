@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import { getRedis } from "@/lib/server/redis";
-import { creatorProfileKey, creatorProfileNonceKey, getCreatorProfileMeta, type CreatorProfileMeta } from "@/lib/server/creator-profile";
+import { creatorProfileKey, getCreatorProfileMeta, type CreatorProfileMeta } from "@/lib/server/creator-profile";
 import { verifySolanaMessage } from "@/lib/server/verify-solana-signature";
 
 import { getTrades } from "@/lib/devnet-market";
@@ -649,7 +650,7 @@ async function readProfileUpdate(
       "xUrl",
       "telegramUrl",
       "websiteUrl",
-      "nonce",
+      "issuedAt",
       "message",
       "signature",
     ].forEach(
@@ -697,6 +698,64 @@ async function readProfileUpdate(
   };
 }
 
+function profileSigningMessage({
+  wallet,
+  issuedAt,
+  displayName,
+  username,
+  bio,
+  avatarUrl,
+  xUrl,
+  telegramUrl,
+  websiteUrl,
+  avatarSha256,
+}: {
+  wallet: string;
+  issuedAt: string;
+  displayName: string;
+  username: string;
+  bio: string;
+  avatarUrl: string;
+  xUrl: string;
+  telegramUrl: string;
+  websiteUrl: string;
+  avatarSha256: string;
+}) {
+  return [
+    "Kodiak creator profile update",
+    `Wallet: ${wallet}`,
+    `Network: ${KODIAK_NETWORK}`,
+    `Issued at: ${issuedAt}`,
+    `Display name: ${displayName}`,
+    `Username: ${username}`,
+    `Bio: ${bio}`,
+    `Avatar URL: ${avatarUrl}`,
+    `X URL: ${xUrl}`,
+    `Telegram URL: ${telegramUrl}`,
+    `Website URL: ${websiteUrl}`,
+    `Avatar SHA-256: ${avatarSha256}`,
+  ].join("\n");
+}
+
+async function sha256File(
+  file: File,
+) {
+  const bytes =
+    Buffer.from(
+      await file.arrayBuffer(),
+    );
+
+  return createHash(
+    "sha256",
+  )
+    .update(
+      bytes,
+    )
+    .digest(
+      "hex",
+    );
+}
+
 export async function PUT(
   request: NextRequest,
   context: Context,
@@ -720,16 +779,16 @@ export async function PUT(
         request,
       );
 
-    const nonce =
+    const issuedAt =
       cleanText(
-        body.nonce,
-        100,
+        body.issuedAt,
+        40,
       );
 
     const message =
       cleanText(
         body.message,
-        1000,
+        4000,
       );
 
     const signature =
@@ -739,7 +798,7 @@ export async function PUT(
       );
 
     if (
-      !nonce ||
+      !issuedAt ||
       !message ||
       !signature
     ) {
@@ -754,47 +813,112 @@ export async function PUT(
       );
     }
 
-    const redisClient =
-      getRedis();
-
-    const nonceKey =
-      creatorProfileNonceKey(
-        wallet,
-        nonce,
+    const issuedAtMs =
+      Date.parse(
+        issuedAt,
       );
 
-    const expectedRaw =
-      await redisClient.get<unknown>(
-        nonceKey,
-      );
-
-    const expected =
-      typeof expectedRaw === "string"
-        ? expectedRaw
-        : expectedRaw &&
-            typeof expectedRaw === "object" &&
-            "message" in expectedRaw &&
-            typeof (
-              expectedRaw as {
-                message?: unknown;
-              }
-            ).message === "string"
-          ? (
-              expectedRaw as {
-                message: string;
-              }
-            ).message
-          : "";
+    const now =
+      Date.now();
 
     if (
-      !expected ||
-      expected !==
-        message
+      !Number.isFinite(
+        issuedAtMs,
+      ) ||
+      issuedAtMs >
+        now + 60_000 ||
+      now - issuedAtMs >
+        5 * 60_000
     ) {
       return NextResponse.json(
         {
           error:
             "This edit authorization expired. Please sign again.",
+        },
+        {
+          status: 401,
+        },
+      );
+    }
+
+    const displayName =
+      cleanText(
+        body.displayName,
+        50,
+      );
+
+    const username =
+      cleanText(
+        body.username,
+        24,
+      ).replace(
+        /[^a-zA-Z0-9_]/g,
+        "",
+      );
+
+    const bio =
+      cleanText(
+        body.bio,
+        280,
+      );
+
+    const signedAvatarUrl =
+      cleanText(
+        body.avatarUrl,
+        300,
+      );
+
+    const signedXUrl =
+      cleanText(
+        body.xUrl,
+        300,
+      );
+
+    const signedTelegramUrl =
+      cleanText(
+        body.telegramUrl,
+        300,
+      );
+
+    const signedWebsiteUrl =
+      cleanText(
+        body.websiteUrl,
+        300,
+      );
+
+    const avatarSha256 =
+      image
+        ? await sha256File(
+            image,
+          )
+        : "";
+
+    const expectedMessage =
+      profileSigningMessage({
+        wallet,
+        issuedAt,
+        displayName,
+        username,
+        bio,
+        avatarUrl:
+          signedAvatarUrl,
+        xUrl:
+          signedXUrl,
+        telegramUrl:
+          signedTelegramUrl,
+        websiteUrl:
+          signedWebsiteUrl,
+        avatarSha256,
+      });
+
+    if (
+      message !==
+      expectedMessage
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "The signed profile data does not match the submitted profile.",
         },
         {
           status: 401,
@@ -820,15 +944,6 @@ export async function PUT(
       );
     }
 
-    const username =
-      cleanText(
-        body.username,
-        24,
-      ).replace(
-        /[^a-zA-Z0-9_]/g,
-        "",
-      );
-
     const avatarUrl =
       image
         ? await uploadProfileImage(
@@ -836,48 +951,42 @@ export async function PUT(
             image,
           )
         : cleanUrl(
-            body.avatarUrl,
+            signedAvatarUrl,
           );
+
+    const xUrl =
+      cleanUrl(
+        signedXUrl,
+      );
+
+    const telegramUrl =
+      cleanUrl(
+        signedTelegramUrl,
+      );
+
+    const websiteUrl =
+      cleanUrl(
+        signedWebsiteUrl,
+      );
 
     const profile:
       CreatorProfileMeta = {
-      displayName:
-        cleanText(
-          body.displayName,
-          50,
-        ),
+      displayName,
       username,
-      bio:
-        cleanText(
-          body.bio,
-          280,
-        ),
+      bio,
       avatarUrl,
-      xUrl:
-        cleanUrl(
-          body.xUrl,
-        ),
-      telegramUrl:
-        cleanUrl(
-          body.telegramUrl,
-        ),
-      websiteUrl:
-        cleanUrl(
-          body.websiteUrl,
-        ),
+      xUrl,
+      telegramUrl,
+      websiteUrl,
       updatedAt:
         new Date().toISOString(),
     };
 
-    await redisClient.set(
+    await getRedis().set(
       creatorProfileKey(
         wallet,
       ),
       profile,
-    );
-
-    await redisClient.del(
-      nonceKey,
     );
 
     return NextResponse.json({

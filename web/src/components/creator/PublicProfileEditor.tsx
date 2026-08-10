@@ -8,6 +8,10 @@ import {
   useWallet,
 } from "@solana/wallet-adapter-react";
 
+import {
+  KODIAK_NETWORK,
+} from "@/lib/solana/network";
+
 type Meta = {
   displayName: string;
   username: string;
@@ -17,6 +21,35 @@ type Meta = {
   telegramUrl: string;
   websiteUrl: string;
 };
+
+type SignedProfilePayload = {
+  wallet: string;
+  network: string;
+  issuedAt: string;
+  displayName: string;
+  username: string;
+  bio: string;
+  avatarUrl: string;
+  xUrl: string;
+  telegramUrl: string;
+  websiteUrl: string;
+  avatarSha256: string;
+};
+
+function normalizeUsername(
+  value: string,
+) {
+  return value
+    .trim()
+    .slice(
+      0,
+      24,
+    )
+    .replace(
+      /[^a-zA-Z0-9_]/g,
+      "",
+    );
+}
 
 export function PublicProfileEditor({
   wallet,
@@ -185,41 +218,6 @@ export function PublicProfileEditor({
       );
   }
 
-  function profileSigningMessage({
-    issuedAt,
-    avatarSha256,
-  }: {
-    issuedAt: string;
-    avatarSha256: string;
-  }) {
-    const username =
-      form.username
-        .trim()
-        .slice(
-          0,
-          24,
-        )
-        .replace(
-          /[^a-zA-Z0-9_]/g,
-          "",
-        );
-
-    return [
-      "Kodiak creator profile update",
-      `Wallet: ${wallet}`,
-      `Network: ${process.env.NEXT_PUBLIC_SOLANA_NETWORK?.trim().toLowerCase() === "mainnet" && process.env.NEXT_PUBLIC_KODIAK_MAINNET_ENABLED?.trim().toLowerCase() === "true" ? "mainnet" : "devnet"}`,
-      `Issued at: ${issuedAt}`,
-      `Display name: ${form.displayName.trim().slice(0, 50)}`,
-      `Username: ${username}`,
-      `Bio: ${form.bio.trim().slice(0, 280)}`,
-      `Avatar URL: ${form.avatarUrl.trim()}`,
-      `X URL: ${form.xUrl.trim()}`,
-      `Telegram URL: ${form.telegramUrl.trim()}`,
-      `Website URL: ${form.websiteUrl.trim()}`,
-      `Avatar SHA-256: ${avatarSha256}`,
-    ].join("\n");
-  }
-
   async function save() {
     if (
       !signMessage
@@ -236,9 +234,6 @@ export function PublicProfileEditor({
         true,
       );
 
-      const issuedAt =
-        new Date().toISOString();
-
       const avatarSha256 =
         avatarFile
           ? await sha256File(
@@ -246,11 +241,46 @@ export function PublicProfileEditor({
             )
           : "";
 
-      const message =
-        profileSigningMessage({
-          issuedAt,
-          avatarSha256,
-        });
+      const signedPayload:
+        SignedProfilePayload = {
+        wallet,
+        network:
+          KODIAK_NETWORK,
+        issuedAt:
+          new Date().toISOString(),
+        displayName:
+          form.displayName
+            .trim()
+            .slice(
+              0,
+              50,
+            ),
+        username:
+          normalizeUsername(
+            form.username,
+          ),
+        bio:
+          form.bio
+            .trim()
+            .slice(
+              0,
+              280,
+            ),
+        avatarUrl:
+          form.avatarUrl.trim(),
+        xUrl:
+          form.xUrl.trim(),
+        telegramUrl:
+          form.telegramUrl.trim(),
+        websiteUrl:
+          form.websiteUrl.trim(),
+        avatarSha256,
+      };
+
+      const signedPayloadText =
+        JSON.stringify(
+          signedPayload,
+        );
 
       setStatus(
         "Waiting for wallet signature...",
@@ -259,7 +289,7 @@ export function PublicProfileEditor({
       const signed =
         await signMessage(
           new TextEncoder().encode(
-            message,
+            signedPayloadText,
           ),
         );
 
@@ -280,48 +310,8 @@ export function PublicProfileEditor({
         new FormData();
 
       outgoing.append(
-        "displayName",
-        form.displayName,
-      );
-
-      outgoing.append(
-        "username",
-        form.username,
-      );
-
-      outgoing.append(
-        "bio",
-        form.bio,
-      );
-
-      outgoing.append(
-        "avatarUrl",
-        form.avatarUrl,
-      );
-
-      outgoing.append(
-        "xUrl",
-        form.xUrl,
-      );
-
-      outgoing.append(
-        "telegramUrl",
-        form.telegramUrl,
-      );
-
-      outgoing.append(
-        "websiteUrl",
-        form.websiteUrl,
-      );
-
-      outgoing.append(
-        "issuedAt",
-        issuedAt,
-      );
-
-      outgoing.append(
-        "message",
-        message,
+        "signedPayload",
+        signedPayloadText,
       );
 
       outgoing.append(
@@ -407,6 +397,7 @@ export function PublicProfileEditor({
       );
     }
   }
+
   if (
     !editing
   ) {

@@ -650,8 +650,7 @@ async function readProfileUpdate(
       "xUrl",
       "telegramUrl",
       "websiteUrl",
-      "issuedAt",
-      "message",
+      "signedPayload",
       "signature",
     ].forEach(
       (key) => {
@@ -698,45 +697,6 @@ async function readProfileUpdate(
   };
 }
 
-function profileSigningMessage({
-  wallet,
-  issuedAt,
-  displayName,
-  username,
-  bio,
-  avatarUrl,
-  xUrl,
-  telegramUrl,
-  websiteUrl,
-  avatarSha256,
-}: {
-  wallet: string;
-  issuedAt: string;
-  displayName: string;
-  username: string;
-  bio: string;
-  avatarUrl: string;
-  xUrl: string;
-  telegramUrl: string;
-  websiteUrl: string;
-  avatarSha256: string;
-}) {
-  return [
-    "Kodiak creator profile update",
-    `Wallet: ${wallet}`,
-    `Network: ${KODIAK_NETWORK}`,
-    `Issued at: ${issuedAt}`,
-    `Display name: ${displayName}`,
-    `Username: ${username}`,
-    `Bio: ${bio}`,
-    `Avatar URL: ${avatarUrl}`,
-    `X URL: ${xUrl}`,
-    `Telegram URL: ${telegramUrl}`,
-    `Website URL: ${websiteUrl}`,
-    `Avatar SHA-256: ${avatarSha256}`,
-  ].join("\n");
-}
-
 async function sha256File(
   file: File,
 ) {
@@ -754,6 +714,104 @@ async function sha256File(
     .digest(
       "hex",
     );
+}
+
+type SignedProfilePayload = {
+  wallet: string;
+  network: string;
+  issuedAt: string;
+  displayName: string;
+  username: string;
+  bio: string;
+  avatarUrl: string;
+  xUrl: string;
+  telegramUrl: string;
+  websiteUrl: string;
+  avatarSha256: string;
+};
+
+function parseSignedProfilePayload(
+  value: unknown,
+): SignedProfilePayload {
+  if (
+    typeof value !==
+    "string"
+  ) {
+    throw new Error(
+      "Signed profile payload is missing.",
+    );
+  }
+
+  const parsed =
+    JSON.parse(
+      value,
+    ) as Partial<SignedProfilePayload>;
+
+  const stringValue = (
+    field:
+      keyof SignedProfilePayload,
+  ) => {
+    const item =
+      parsed[field];
+
+    if (
+      typeof item !==
+      "string"
+    ) {
+      throw new Error(
+        `Signed profile field ${field} is invalid.`,
+      );
+    }
+
+    return item;
+  };
+
+  return {
+    wallet:
+      stringValue(
+        "wallet",
+      ),
+    network:
+      stringValue(
+        "network",
+      ),
+    issuedAt:
+      stringValue(
+        "issuedAt",
+      ),
+    displayName:
+      stringValue(
+        "displayName",
+      ),
+    username:
+      stringValue(
+        "username",
+      ),
+    bio:
+      stringValue(
+        "bio",
+      ),
+    avatarUrl:
+      stringValue(
+        "avatarUrl",
+      ),
+    xUrl:
+      stringValue(
+        "xUrl",
+      ),
+    telegramUrl:
+      stringValue(
+        "telegramUrl",
+      ),
+    websiteUrl:
+      stringValue(
+        "websiteUrl",
+      ),
+    avatarSha256:
+      stringValue(
+        "avatarSha256",
+      ),
+  };
 }
 
 export async function PUT(
@@ -779,17 +837,11 @@ export async function PUT(
         request,
       );
 
-    const issuedAt =
-      cleanText(
-        body.issuedAt,
-        40,
-      );
-
-    const message =
-      cleanText(
-        body.message,
-        4000,
-      );
+    const signedPayloadText =
+      typeof body.signedPayload ===
+      "string"
+        ? body.signedPayload
+        : "";
 
     const signature =
       cleanText(
@@ -798,8 +850,7 @@ export async function PUT(
       );
 
     if (
-      !issuedAt ||
-      !message ||
+      !signedPayloadText ||
       !signature
     ) {
       return NextResponse.json(
@@ -813,9 +864,51 @@ export async function PUT(
       );
     }
 
+    let signedPayload:
+      SignedProfilePayload;
+
+    try {
+      signedPayload =
+        parseSignedProfilePayload(
+          signedPayloadText,
+        );
+    } catch (
+      error
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof
+            Error
+              ? error.message
+              : "Signed profile payload is invalid.",
+        },
+        {
+          status: 400,
+        },
+      );
+    }
+
+    if (
+      signedPayload.wallet !==
+        wallet ||
+      signedPayload.network !==
+        KODIAK_NETWORK
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "The signed profile belongs to a different wallet or network.",
+        },
+        {
+          status: 401,
+        },
+      );
+    }
+
     const issuedAtMs =
       Date.parse(
-        issuedAt,
+        signedPayload.issuedAt,
       );
 
     const now =
@@ -841,103 +934,10 @@ export async function PUT(
       );
     }
 
-    const displayName =
-      cleanText(
-        body.displayName,
-        50,
-      );
-
-    const username =
-      cleanText(
-        body.username,
-        24,
-      ).replace(
-        /[^a-zA-Z0-9_]/g,
-        "",
-      );
-
-    const bio =
-      cleanText(
-        body.bio,
-        280,
-      );
-
-    const signedAvatarUrl =
-      cleanText(
-        body.avatarUrl,
-        300,
-      );
-
-    const signedXUrl =
-      cleanText(
-        body.xUrl,
-        300,
-      );
-
-    const signedTelegramUrl =
-      cleanText(
-        body.telegramUrl,
-        300,
-      );
-
-    const signedWebsiteUrl =
-      cleanText(
-        body.websiteUrl,
-        300,
-      );
-
-    const avatarSha256 =
-      image
-        ? await sha256File(
-            image,
-          )
-        : "";
-
-    // Check the signed fields line-by-line instead of rebuilding the entire
-    // message. This avoids false mismatches caused by mobile browser/FormData
-    // normalization while still binding the signature to the submitted data.
-    const requiredSignedLines = [
-      `Wallet: ${wallet}`,
-      `Network: ${KODIAK_NETWORK}`,
-      `Issued at: ${issuedAt}`,
-      `Display name: ${displayName}`,
-      `Username: ${username}`,
-      `Bio: ${bio}`,
-      `Avatar URL: ${signedAvatarUrl}`,
-      `X URL: ${signedXUrl}`,
-      `Telegram URL: ${signedTelegramUrl}`,
-      `Website URL: ${signedWebsiteUrl}`,
-      `Avatar SHA-256: ${avatarSha256}`,
-    ];
-
-    const signedLines =
-      message.split("\n");
-
-    if (
-      signedLines[0] !==
-        "Kodiak creator profile update" ||
-      requiredSignedLines.some(
-        (line) =>
-          !signedLines.includes(
-            line,
-          ),
-      )
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "The signed profile data does not match the submitted profile.",
-        },
-        {
-          status: 401,
-        },
-      );
-    }
-
     if (
       !verifySolanaMessage(
         wallet,
-        message,
+        signedPayloadText,
         signature,
       )
     ) {
@@ -952,6 +952,49 @@ export async function PUT(
       );
     }
 
+    const computedAvatarSha256 =
+      image
+        ? await sha256File(
+            image,
+          )
+        : "";
+
+    if (
+      computedAvatarSha256 !==
+      signedPayload.avatarSha256
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "The uploaded profile picture does not match the signed picture.",
+        },
+        {
+          status: 401,
+        },
+      );
+    }
+
+    const displayName =
+      cleanText(
+        signedPayload.displayName,
+        50,
+      );
+
+    const username =
+      cleanText(
+        signedPayload.username,
+        24,
+      ).replace(
+        /[^a-zA-Z0-9_]/g,
+        "",
+      );
+
+    const bio =
+      cleanText(
+        signedPayload.bio,
+        280,
+      );
+
     const avatarUrl =
       image
         ? await uploadProfileImage(
@@ -959,23 +1002,8 @@ export async function PUT(
             image,
           )
         : cleanUrl(
-            signedAvatarUrl,
+            signedPayload.avatarUrl,
           );
-
-    const xUrl =
-      cleanUrl(
-        signedXUrl,
-      );
-
-    const telegramUrl =
-      cleanUrl(
-        signedTelegramUrl,
-      );
-
-    const websiteUrl =
-      cleanUrl(
-        signedWebsiteUrl,
-      );
 
     const profile:
       CreatorProfileMeta = {
@@ -983,9 +1011,18 @@ export async function PUT(
       username,
       bio,
       avatarUrl,
-      xUrl,
-      telegramUrl,
-      websiteUrl,
+      xUrl:
+        cleanUrl(
+          signedPayload.xUrl,
+        ),
+      telegramUrl:
+        cleanUrl(
+          signedPayload.telegramUrl,
+        ),
+      websiteUrl:
+        cleanUrl(
+          signedPayload.websiteUrl,
+        ),
       updatedAt:
         new Date().toISOString(),
     };

@@ -763,10 +763,28 @@ export async function PUT(
         nonce,
       );
 
-    const expected =
-      await redisClient.get<string>(
+    const expectedRaw =
+      await redisClient.get<unknown>(
         nonceKey,
       );
+
+    const expected =
+      typeof expectedRaw === "string"
+        ? expectedRaw
+        : expectedRaw &&
+            typeof expectedRaw === "object" &&
+            "message" in expectedRaw &&
+            typeof (
+              expectedRaw as {
+                message?: unknown;
+              }
+            ).message === "string"
+          ? (
+              expectedRaw as {
+                message: string;
+              }
+            ).message
+          : "";
 
     if (
       !expected ||

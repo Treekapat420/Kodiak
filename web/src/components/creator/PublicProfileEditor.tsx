@@ -157,6 +157,69 @@ export function PublicProfileEditor({
     </label>
   );
 
+  async function sha256File(
+    file: File,
+  ) {
+    const digest =
+      await crypto.subtle.digest(
+        "SHA-256",
+        await file.arrayBuffer(),
+      );
+
+    return Array.from(
+      new Uint8Array(
+        digest,
+      ),
+    )
+      .map(
+        (value) =>
+          value
+            .toString(16)
+            .padStart(
+              2,
+              "0",
+            ),
+      )
+      .join(
+        "",
+      );
+  }
+
+  function profileSigningMessage({
+    issuedAt,
+    avatarSha256,
+  }: {
+    issuedAt: string;
+    avatarSha256: string;
+  }) {
+    const username =
+      form.username
+        .trim()
+        .slice(
+          0,
+          24,
+        )
+        .replace(
+          /[^a-zA-Z0-9_]/g,
+          "",
+        );
+
+    return [
+      "Kodiak creator profile update",
+      `Wallet: ${wallet}`,
+      `Network: ${process.env.NEXT_PUBLIC_SOLANA_NETWORK?.trim().toLowerCase() === "mainnet" && process.env.NEXT_PUBLIC_KODIAK_MAINNET_ENABLED?.trim().toLowerCase() === "true" ? "mainnet" : "devnet"}`,
+      `Issued at: ${issuedAt}`,
+      `Display name: ${form.displayName.trim().slice(0, 50)}`,
+      `Username: ${username}`,
+      `Bio: ${form.bio.trim().slice(0, 280)}`,
+      `Avatar URL: ${form.avatarUrl.trim()}`,
+      `X URL: ${form.xUrl.trim()}`,
+      `Telegram URL: ${form.telegramUrl.trim()}`,
+      `Website URL: ${form.websiteUrl.trim()}`,
+      `Avatar SHA-256: ${avatarSha256}`,
+    ].join("\n");
+  }
+
   async function save() {
     if (
       !signMessage
@@ -173,45 +236,30 @@ export function PublicProfileEditor({
         true,
       );
 
+      const issuedAt =
+        new Date().toISOString();
+
+      const avatarSha256 =
+        avatarFile
+          ? await sha256File(
+              avatarFile,
+            )
+          : "";
+
+      const message =
+        profileSigningMessage({
+          issuedAt,
+          avatarSha256,
+        });
+
       setStatus(
         "Waiting for wallet signature...",
       );
 
-      const nonceResponse =
-        await fetch(
-          `/api/creator/${encodeURIComponent(
-            wallet,
-          )}/profile/nonce`,
-          {
-            method:
-              "POST",
-            cache:
-              "no-store",
-          },
-        );
-
-      const nonceData =
-        (await nonceResponse.json()) as {
-          nonce?: string;
-          message?: string;
-          error?: string;
-        };
-
-      if (
-        !nonceResponse.ok ||
-        !nonceData.nonce ||
-        !nonceData.message
-      ) {
-        throw new Error(
-          nonceData.error ||
-            "Unable to authorize edit.",
-        );
-      }
-
       const signed =
         await signMessage(
           new TextEncoder().encode(
-            nonceData.message,
+            message,
           ),
         );
 
@@ -267,13 +315,13 @@ export function PublicProfileEditor({
       );
 
       outgoing.append(
-        "nonce",
-        nonceData.nonce,
+        "issuedAt",
+        issuedAt,
       );
 
       outgoing.append(
         "message",
-        nonceData.message,
+        message,
       );
 
       outgoing.append(
@@ -359,7 +407,6 @@ export function PublicProfileEditor({
       );
     }
   }
-
   if (
     !editing
   ) {

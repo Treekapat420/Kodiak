@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
+import { getRedis } from "@/lib/server/redis";
+import { creatorProfileKey, creatorProfileNonceKey, getCreatorProfileMeta, type CreatorProfileMeta } from "@/lib/server/creator-profile";
+import { verifySolanaMessage } from "@/lib/server/verify-solana-signature";
 
 import { getTrades } from "@/lib/devnet-market";
 import {
@@ -332,18 +335,11 @@ export async function GET(
       );
     }
 
-    const [
-      launches,
-      foundingCreator,
-    ] =
-      await Promise.all([
-        loadCreatorLaunches(
-          wallet,
-        ),
-        getFoundingCreatorStatus(
-          wallet,
-        ),
-      ]);
+    const [launches, foundingCreator, creatorMeta] = await Promise.all([
+      loadCreatorLaunches(wallet),
+      getFoundingCreatorStatus(wallet),
+      getCreatorProfileMeta(wallet),
+    ]);
 
     const enriched =
       await Promise.all(
@@ -472,6 +468,7 @@ export async function GET(
           KODIAK_NETWORK,
         profile: {
           wallet,
+          ...creatorMeta,
           foundingCreator,
           launches:
             enriched,
@@ -500,5 +497,61 @@ export async function GET(
         status: 500,
       },
     );
+  }
+}
+
+
+function cleanText(value: unknown, max: number) {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+function cleanUrl(value: unknown, max = 300) {
+  const text = cleanText(value, max);
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : "";
+  } catch { return ""; }
+}
+
+export async function PUT(request: NextRequest, context: Context) {
+  try {
+    const { wallet: rawWallet } = await context.params;
+    const wallet = new PublicKey(rawWallet).toBase58();
+    const body = await request.json() as Record<string, unknown>;
+    const nonce = cleanText(body.nonce, 100);
+    const message = cleanText(body.message, 1000);
+    const signature = cleanText(body.signature, 500);
+    if (!nonce || !message || !signature) {
+      return NextResponse.json({ error: "Wallet signature is required." }, { status: 401 });
+    }
+
+    const redisClient = getRedis();
+    const nonceKey = creatorProfileNonceKey(wallet, nonce);
+    const expected = await redisClient.get<string>(nonceKey);
+    if (!expected || expected !== message) {
+      return NextResponse.json({ error: "This edit authorization expired. Please sign again." }, { status: 401 });
+    }
+    if (!verifySolanaMessage(wallet, message, signature)) {
+      return NextResponse.json({ error: "Wallet signature could not be verified." }, { status: 401 });
+    }
+
+    const username = cleanText(body.username, 24).replace(/[^a-zA-Z0-9_]/g, "");
+    const profile: CreatorProfileMeta = {
+      displayName: cleanText(body.displayName, 50),
+      username,
+      bio: cleanText(body.bio, 280),
+      avatarUrl: cleanUrl(body.avatarUrl),
+      xUrl: cleanUrl(body.xUrl),
+      telegramUrl: cleanUrl(body.telegramUrl),
+      websiteUrl: cleanUrl(body.websiteUrl),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await redisClient.set(creatorProfileKey(wallet), profile);
+    await redisClient.del(nonceKey);
+    return NextResponse.json({ ok: true, network: KODIAK_NETWORK, profile });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to update creator profile." }, { status: 500 });
   }
 }

@@ -893,27 +893,35 @@ export async function PUT(
           )
         : "";
 
-    const expectedMessage =
-      profileSigningMessage({
-        wallet,
-        issuedAt,
-        displayName,
-        username,
-        bio,
-        avatarUrl:
-          signedAvatarUrl,
-        xUrl:
-          signedXUrl,
-        telegramUrl:
-          signedTelegramUrl,
-        websiteUrl:
-          signedWebsiteUrl,
-        avatarSha256,
-      });
+    // Check the signed fields line-by-line instead of rebuilding the entire
+    // message. This avoids false mismatches caused by mobile browser/FormData
+    // normalization while still binding the signature to the submitted data.
+    const requiredSignedLines = [
+      `Wallet: ${wallet}`,
+      `Network: ${KODIAK_NETWORK}`,
+      `Issued at: ${issuedAt}`,
+      `Display name: ${displayName}`,
+      `Username: ${username}`,
+      `Bio: ${bio}`,
+      `Avatar URL: ${signedAvatarUrl}`,
+      `X URL: ${signedXUrl}`,
+      `Telegram URL: ${signedTelegramUrl}`,
+      `Website URL: ${signedWebsiteUrl}`,
+      `Avatar SHA-256: ${avatarSha256}`,
+    ];
+
+    const signedLines =
+      message.split("\n");
 
     if (
-      message !==
-      expectedMessage
+      signedLines[0] !==
+        "Kodiak creator profile update" ||
+      requiredSignedLines.some(
+        (line) =>
+          !signedLines.includes(
+            line,
+          ),
+      )
     ) {
       return NextResponse.json(
         {

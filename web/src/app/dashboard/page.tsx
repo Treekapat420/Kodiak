@@ -261,6 +261,15 @@ export default function DashboardPage() {
           >
             Creator Setup
           </Link>
+
+          {wallet ? (
+            <Link
+              href={`/creator/${wallet}`}
+              className="rounded-xl border border-amber-300/30 bg-amber-300/[0.08] px-4 py-3 text-sm font-black text-amber-300"
+            >
+              My Public Profile
+            </Link>
+          ) : null}
         </nav>
 
         <header className="rounded-[2rem] border border-white/10 bg-gradient-to-br from-emerald-400/10 via-white/[0.03] to-amber-300/10 p-6 sm:p-9">
@@ -320,6 +329,19 @@ export default function DashboardPage() {
               {wallet ||
                 "Wallet not connected"}
             </p>
+
+            {wallet ? (
+              <Link
+                href={`/creator/${wallet}`}
+                className="mt-4 inline-flex rounded-xl bg-amber-300 px-4 py-3 text-sm font-black text-black"
+              >
+                View my public profile
+              </Link>
+            ) : (
+              <p className="mt-3 text-xs text-zinc-500">
+                Connect your creator wallet to open your public profile.
+              </p>
+            )}
           </div>
 
           {foundingCreator

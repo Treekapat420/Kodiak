@@ -49,8 +49,10 @@ function buildDefaultConfig() {
     infrastructureFeeBps: 25,
     regularCreatorFeeBps: 45,
     regularKodiakFeeBps: 50,
-    foundingCreatorFeeBps: 50,
-    foundingKodiakFeeBps: 45,
+    // Founding Creator status is a program/badge benefit only.
+    // It does not alter the on-chain LaunchLab fee split.
+    foundingCreatorFeeBps: 45,
+    foundingKodiakFeeBps: 50,
     foundingCreatorLimit: 100,
     creatorSuccessFundPercentOfKodiakRevenue: 5,
     foundingProgramEnabled: true,

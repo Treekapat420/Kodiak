@@ -1,8 +1,8 @@
 const fees = [
-  ["Kodiak platform fee", "0.60%", "Curve trades"],
+  ["Kodiak platform fee", "0.50%", "Curve trades"],
   ["Raydium protocol fee", "0.25%", "Curve trades"],
   ["Creator fee", "0.45%", "Curve trades · claimable"],
-  ["Post-migration creator fee", "1.05%", "Creator opt-in"],
+  ["Post-migration creator rewards", "10% LP share", "Fee Key NFT after graduation"],
 ];
 
 export function FeeSection() {
@@ -20,8 +20,11 @@ export function FeeSection() {
             No hidden fee traps.
           </h2>
           <p className="mt-5 max-w-xl leading-8 text-zinc-400">
-            Kodiak shows costs before a wallet signs. Blockchain expenses are
-            estimates because Solana account and network costs can change.
+            Kodiak shows its configured fee model before a wallet signs.
+            Blockchain expenses are estimates because Solana account and network
+            costs can change. Post-graduation creator rewards come from the
+            creator&apos;s Fee Key share of CPMM LP fees, not a separate 1.05%
+            trading fee.
           </p>
         </div>
 

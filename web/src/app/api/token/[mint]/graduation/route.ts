@@ -89,7 +89,7 @@ function progressBps(
 
     const value =
       Number(
-        (real * 10_000n) /
+        (real * BigInt(10_000)) /
           target,
       );
 

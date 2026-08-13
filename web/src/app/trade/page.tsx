@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import BN from "bn.js";
 import {
+  CurveCalculator,
+  FeeOn,
   getPdaLaunchpadPoolId,
   PlatformConfig,
   TxVersion,
@@ -123,6 +125,40 @@ function decimalToRawAmount(value: string, decimals: number): BN {
   return new BN(whole || "0")
     .mul(new BN(10).pow(new BN(decimals)))
     .add(new BN(padded || "0"));
+}
+
+function rawAmountToDecimalString(
+  amount: BN,
+  decimals: number,
+) {
+  const scale =
+    new BN(10).pow(
+      new BN(decimals),
+    );
+
+  const whole =
+    amount.div(scale).toString();
+
+  if (decimals === 0) {
+    return whole;
+  }
+
+  const fraction =
+    amount
+      .mod(scale)
+      .toString()
+      .padStart(
+        decimals,
+        "0",
+      )
+      .replace(
+        /0+$/,
+        "",
+      );
+
+  return fraction
+    ? `${whole}.${fraction}`
+    : whole;
 }
 
 export default function TradePage() {
@@ -638,6 +674,529 @@ export default function TradePage() {
     return recorded;
   }
 
+  async function executeCpmmBuy({
+    graduation,
+    solNumber,
+    lamports,
+  }: {
+    graduation: GraduationState;
+    solNumber: number;
+    lamports: number;
+  }) {
+    if (
+      !publicKey ||
+      !signTransaction ||
+      !signAllTransactions ||
+      !graduation.cpmmPoolId
+    ) {
+      throw new Error(
+        "Kodiak cannot prepare this CPMM buy yet.",
+      );
+    }
+
+    setEstimatedTokens(null);
+
+    setStatus({
+      kind: "working",
+      message:
+        "Loading the graduated Raydium CPMM pool and calculating the purchase...",
+    });
+
+    const mintA =
+      new PublicKey(
+        normalizedMint,
+      );
+
+    const raydium =
+      await loadKodiakRaydium({
+        connection,
+        owner:
+          publicKey,
+        signTransaction,
+        signAllTransactions,
+      });
+
+    const {
+      poolInfo,
+      poolKeys,
+      rpcData,
+    } =
+      await raydium.cpmm.getPoolInfoFromRpc(
+        graduation.cpmmPoolId,
+      );
+
+    const inputMint =
+      NATIVE_MINT.toBase58();
+
+    if (
+      inputMint !==
+        poolInfo.mintA.address &&
+      inputMint !==
+        poolInfo.mintB.address
+    ) {
+      throw new Error(
+        "The graduated CPMM pool does not contain wrapped SOL.",
+      );
+    }
+
+    const outputMint =
+      inputMint ===
+      poolInfo.mintA.address
+        ? poolInfo.mintB.address
+        : poolInfo.mintA.address;
+
+    if (
+      outputMint !==
+      mintA.toBase58()
+    ) {
+      throw new Error(
+        "The graduated CPMM pool does not match this Kodiak token.",
+      );
+    }
+
+    const baseIn =
+      inputMint ===
+      poolInfo.mintA.address;
+
+    const inputAmount =
+      new BN(
+        lamports,
+      );
+
+    const configInfo =
+      rpcData.configInfo;
+
+    if (!configInfo) {
+      throw new Error(
+        "Raydium CPMM fee configuration is unavailable.",
+      );
+    }
+
+    const swapResult =
+      CurveCalculator.swapBaseInput(
+        inputAmount,
+        baseIn
+          ? rpcData.baseReserve
+          : rpcData.quoteReserve,
+        baseIn
+          ? rpcData.quoteReserve
+          : rpcData.baseReserve,
+        configInfo.tradeFeeRate,
+        configInfo.creatorFeeRate,
+        configInfo.protocolFeeRate,
+        configInfo.fundFeeRate,
+        rpcData.feeOn ===
+            FeeOn.BothToken ||
+          rpcData.feeOn ===
+            FeeOn.OnlyTokenB,
+      );
+
+    const outputDecimals =
+      baseIn
+        ? poolInfo.mintB.decimals
+        : poolInfo.mintA.decimals;
+
+    setEstimatedTokens(
+      rawAmountToDecimalString(
+        swapResult.outputAmount,
+        outputDecimals,
+      ),
+    );
+
+    const {
+      transaction,
+      execute,
+    } =
+      await raydium.cpmm.swap({
+        poolInfo,
+        poolKeys,
+        inputAmount,
+        swapResult,
+        slippage:
+          0.01,
+        baseIn,
+        txVersion:
+          TxVersion.V0,
+        config: {
+          associatedOnly:
+            false,
+          checkCreateATAOwner:
+            true,
+        },
+      });
+
+    setStatus({
+      kind: "working",
+      message:
+        "Simulating the CPMM buy before the wallet can sign...",
+    });
+
+    const simulation =
+      transaction instanceof
+      VersionedTransaction
+        ? await connection.simulateTransaction(
+            transaction,
+            {
+              commitment:
+                "confirmed",
+              replaceRecentBlockhash:
+                true,
+              sigVerify:
+                false,
+            },
+          )
+        : await connection.simulateTransaction(
+            transaction,
+          );
+
+    if (
+      simulation.value.err
+    ) {
+      setStatus({
+        kind: "error",
+        message:
+          `CPMM buy simulation failed: ${JSON.stringify(
+            simulation.value.err,
+          )}`,
+        logs:
+          simulation.value.logs ??
+          [],
+      });
+
+      return;
+    }
+
+    setStatus({
+      kind: "working",
+      message:
+        `Simulation passed. Approve the ${NETWORK_LABEL} CPMM buy in your wallet...`,
+    });
+
+    const result =
+      await execute({
+        sendAndConfirm:
+          true,
+      });
+
+    const signature =
+      collectSignature(
+        result,
+      );
+
+    if (!signature) {
+      throw new Error(
+        "The CPMM purchase succeeded, but no transaction signature was returned.",
+      );
+    }
+
+    setStatus({
+      kind: "working",
+      message:
+        "CPMM purchase confirmed. Updating the token chart...",
+    });
+
+    const recorded =
+      await recordTrade({
+        mint:
+          mintA,
+        signature,
+        side:
+          "buy",
+        solAmount:
+          solNumber,
+      });
+
+    await loadGraduationState(
+      normalizedMint,
+      {
+        silent:
+          true,
+      },
+    ).catch(
+      () => null,
+    );
+
+    setStatus({
+      kind: "success",
+      message:
+        recorded
+          ? `${solNumber} ${NETWORK_LABEL} SOL CPMM purchase confirmed and added to the chart.`
+          : `${solNumber} ${NETWORK_LABEL} SOL CPMM purchase confirmed. Chart indexing is still pending.`,
+      signature,
+    });
+  }
+
+  async function executeCpmmSell({
+    graduation,
+    rawSellAmount,
+    sellNumber,
+  }: {
+    graduation: GraduationState;
+    rawSellAmount: BN;
+    sellNumber: number;
+  }) {
+    if (
+      !publicKey ||
+      !signTransaction ||
+      !signAllTransactions ||
+      !graduation.cpmmPoolId
+    ) {
+      throw new Error(
+        "Kodiak cannot prepare this CPMM sell yet.",
+      );
+    }
+
+    setEstimatedSellSol(
+      null,
+    );
+
+    setStatus({
+      kind: "working",
+      message:
+        "Loading the graduated Raydium CPMM pool and calculating the sale...",
+    });
+
+    const mintA =
+      new PublicKey(
+        normalizedMint,
+      );
+
+    const raydium =
+      await loadKodiakRaydium({
+        connection,
+        owner:
+          publicKey,
+        signTransaction,
+        signAllTransactions,
+      });
+
+    const {
+      poolInfo,
+      poolKeys,
+      rpcData,
+    } =
+      await raydium.cpmm.getPoolInfoFromRpc(
+        graduation.cpmmPoolId,
+      );
+
+    const inputMint =
+      mintA.toBase58();
+
+    if (
+      inputMint !==
+        poolInfo.mintA.address &&
+      inputMint !==
+        poolInfo.mintB.address
+    ) {
+      throw new Error(
+        "The graduated CPMM pool does not match this Kodiak token.",
+      );
+    }
+
+    const outputMint =
+      inputMint ===
+      poolInfo.mintA.address
+        ? poolInfo.mintB.address
+        : poolInfo.mintA.address;
+
+    if (
+      outputMint !==
+      NATIVE_MINT.toBase58()
+    ) {
+      throw new Error(
+        "The graduated CPMM pool does not contain wrapped SOL.",
+      );
+    }
+
+    const baseIn =
+      inputMint ===
+      poolInfo.mintA.address;
+
+    const configInfo =
+      rpcData.configInfo;
+
+    if (!configInfo) {
+      throw new Error(
+        "Raydium CPMM fee configuration is unavailable.",
+      );
+    }
+
+    const swapResult =
+      CurveCalculator.swapBaseInput(
+        rawSellAmount,
+        baseIn
+          ? rpcData.baseReserve
+          : rpcData.quoteReserve,
+        baseIn
+          ? rpcData.quoteReserve
+          : rpcData.baseReserve,
+        configInfo.tradeFeeRate,
+        configInfo.creatorFeeRate,
+        configInfo.protocolFeeRate,
+        configInfo.fundFeeRate,
+        rpcData.feeOn ===
+            FeeOn.BothToken ||
+          rpcData.feeOn ===
+            FeeOn.OnlyTokenB,
+      );
+
+    const estimatedLamports =
+      Number(
+        swapResult.outputAmount.toString(),
+      );
+
+    if (
+      Number.isFinite(
+        estimatedLamports,
+      )
+    ) {
+      setEstimatedSellSol(
+        (
+          estimatedLamports /
+          LAMPORTS_PER_SOL
+        ).toFixed(
+          9,
+        ),
+      );
+    }
+
+    const {
+      transaction,
+      execute,
+    } =
+      await raydium.cpmm.swap({
+        poolInfo,
+        poolKeys,
+        inputAmount:
+          rawSellAmount,
+        swapResult,
+        slippage:
+          0.01,
+        baseIn,
+        txVersion:
+          TxVersion.V0,
+        config: {
+          associatedOnly:
+            false,
+          checkCreateATAOwner:
+            true,
+        },
+      });
+
+    setStatus({
+      kind: "working",
+      message:
+        "Simulating the CPMM sell before the wallet can sign...",
+    });
+
+    const simulation =
+      transaction instanceof
+      VersionedTransaction
+        ? await connection.simulateTransaction(
+            transaction,
+            {
+              commitment:
+                "confirmed",
+              replaceRecentBlockhash:
+                true,
+              sigVerify:
+                false,
+            },
+          )
+        : await connection.simulateTransaction(
+            transaction,
+          );
+
+    if (
+      simulation.value.err
+    ) {
+      setStatus({
+        kind: "error",
+        message:
+          `CPMM sell simulation failed: ${JSON.stringify(
+            simulation.value.err,
+          )}`,
+        logs:
+          simulation.value.logs ??
+          [],
+      });
+
+      return;
+    }
+
+    setStatus({
+      kind: "working",
+      message:
+        `Simulation passed. Approve the ${NETWORK_LABEL} CPMM sell in your wallet...`,
+    });
+
+    const result =
+      await execute({
+        sendAndConfirm:
+          true,
+      });
+
+    const signature =
+      collectSignature(
+        result,
+      );
+
+    if (!signature) {
+      throw new Error(
+        "The CPMM sale succeeded, but no transaction signature was returned.",
+      );
+    }
+
+    setStatus({
+      kind: "working",
+      message:
+        "CPMM sale confirmed. Updating the token chart...",
+    });
+
+    const solAmount =
+      Number.isFinite(
+        estimatedLamports,
+      )
+        ? estimatedLamports /
+          LAMPORTS_PER_SOL
+        : undefined;
+
+    const recorded =
+      await recordTrade({
+        mint:
+          mintA,
+        signature,
+        side:
+          "sell",
+        solAmount,
+        tokenAmount:
+          sellNumber,
+      });
+
+    setSellTokens(
+      "",
+    );
+
+    await loadGraduationState(
+      normalizedMint,
+      {
+        silent:
+          true,
+      },
+    ).catch(
+      () => null,
+    );
+
+    setStatus({
+      kind: "success",
+      message:
+        recorded
+          ? `${sellNumber.toLocaleString()} tokens sold through CPMM and added to the chart.`
+          : `${sellNumber.toLocaleString()} tokens sold through CPMM. Chart indexing is still pending.`,
+      signature,
+    });
+  }
+
   const buyToken = async () => {
     if (
       !publicKey ||
@@ -661,46 +1220,50 @@ export default function TradePage() {
       return;
     }
 
+    let liveGraduation:
+      GraduationState | null =
+      null;
+
     try {
-      const graduation =
+      liveGraduation =
         await loadGraduationState(
           normalizedMint,
           {
-            silent: true,
+            silent:
+              true,
           },
         );
 
       if (
-        graduation?.trading.graduated
+        liveGraduation?.trading.graduationReady
       ) {
         setStatus({
           kind: "error",
           message:
-            graduation.trading.cpmmReady
-              ? "This token has graduated. Bonding-curve buys are disabled; CPMM trading will be used next."
-              : "This token has graduated and Kodiak is waiting for its CPMM pool.",
+            "This token has reached its bonding target. Trading is paused while graduation completes.",
         });
         return;
       }
 
       if (
-        graduation?.trading.graduationReady
-      ) {
-        setStatus({
-          kind: "error",
-          message:
-            "This token has reached its bonding target. Curve buys are disabled while graduation completes.",
-        });
-        return;
-      }
-
-      if (
-        graduation?.trading.cancelled
+        liveGraduation?.trading.cancelled
       ) {
         setStatus({
           kind: "error",
           message:
             "This LaunchLab pool is cancelled.",
+        });
+        return;
+      }
+
+      if (
+        liveGraduation?.trading.graduated &&
+        !liveGraduation.trading.cpmmReady
+      ) {
+        setStatus({
+          kind: "error",
+          message:
+            "This token has graduated and Kodiak is waiting for its Raydium CPMM pool.",
         });
         return;
       }
@@ -743,6 +1306,34 @@ export default function TradePage() {
         message:
           "The SOL amount could not be converted to lamports.",
       });
+      return;
+    }
+
+    if (
+      liveGraduation?.trading.graduated &&
+      liveGraduation.trading.cpmmReady
+    ) {
+      try {
+        await executeCpmmBuy({
+          graduation:
+            liveGraduation,
+          solNumber,
+          lamports,
+        });
+      } catch (error) {
+        setStatus({
+          kind: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : `The ${NETWORK_LABEL} CPMM purchase failed.`,
+          logs:
+            extractLogs(
+              error,
+            ),
+        });
+      }
+
       return;
     }
 
@@ -921,46 +1512,50 @@ export default function TradePage() {
       return;
     }
 
+    let liveGraduation:
+      GraduationState | null =
+      null;
+
     try {
-      const graduation =
+      liveGraduation =
         await loadGraduationState(
           normalizedMint,
           {
-            silent: true,
+            silent:
+              true,
           },
         );
 
       if (
-        graduation?.trading.graduated
+        liveGraduation?.trading.graduationReady
       ) {
         setStatus({
           kind: "error",
           message:
-            graduation.trading.cpmmReady
-              ? "This token has graduated. Bonding-curve sells are disabled; CPMM trading will be used next."
-              : "This token has graduated and Kodiak is waiting for its CPMM pool.",
+            "This token has reached its bonding target. Trading is paused while graduation completes.",
         });
         return;
       }
 
       if (
-        graduation?.trading.graduationReady
-      ) {
-        setStatus({
-          kind: "error",
-          message:
-            "This token has reached its bonding target. Curve sells are disabled while graduation completes.",
-        });
-        return;
-      }
-
-      if (
-        graduation?.trading.cancelled
+        liveGraduation?.trading.cancelled
       ) {
         setStatus({
           kind: "error",
           message:
             "This LaunchLab pool is cancelled.",
+        });
+        return;
+      }
+
+      if (
+        liveGraduation?.trading.graduated &&
+        !liveGraduation.trading.cpmmReady
+      ) {
+        setStatus({
+          kind: "error",
+          message:
+            "This token has graduated and Kodiak is waiting for its Raydium CPMM pool.",
         });
         return;
       }
@@ -1034,6 +1629,34 @@ export default function TradePage() {
         message:
           "The token amount is too small to sell.",
       });
+      return;
+    }
+
+    if (
+      liveGraduation?.trading.graduated &&
+      liveGraduation.trading.cpmmReady
+    ) {
+      try {
+        await executeCpmmSell({
+          graduation:
+            liveGraduation,
+          rawSellAmount,
+          sellNumber,
+        });
+      } catch (error) {
+        setStatus({
+          kind: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : `The ${NETWORK_LABEL} CPMM sale failed.`,
+          logs:
+            extractLogs(
+              error,
+            ),
+        });
+      }
+
       return;
     }
 
@@ -1502,7 +2125,8 @@ export default function TradePage() {
                   !mintIsValid ||
                   Boolean(
                     graduationState &&
-                      !graduationState.trading.launchpadActive,
+                      !graduationState.trading.launchpadActive &&
+                      !graduationState.trading.cpmmReady,
                   )
                 }
                 className="mt-5 w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
@@ -1510,7 +2134,7 @@ export default function TradePage() {
                 {status.kind === "working"
                   ? `Preparing ${NETWORK_LABEL} buy...`
                   : graduationState?.trading.graduated
-                    ? "CPMM Buy Coming Next"
+                    ? "Buy on Raydium CPMM"
                     : graduationState?.trading.graduationReady
                       ? "Graduation in Progress"
                       : "Buy on Bonding Curve"}
@@ -1600,7 +2224,8 @@ export default function TradePage() {
                   !mintIsValid ||
                   Boolean(
                     graduationState &&
-                      !graduationState.trading.launchpadActive,
+                      !graduationState.trading.launchpadActive &&
+                      !graduationState.trading.cpmmReady,
                   ) ||
                   !sellTokens ||
                   tokenBalance === null ||
@@ -1611,7 +2236,7 @@ export default function TradePage() {
                 {status.kind === "working"
                   ? `Preparing ${NETWORK_LABEL} sell...`
                   : graduationState?.trading.graduated
-                    ? "CPMM Sell Coming Next"
+                    ? "Sell on Raydium CPMM"
                     : graduationState?.trading.graduationReady
                       ? "Graduation in Progress"
                       : "Sell on Bonding Curve"}

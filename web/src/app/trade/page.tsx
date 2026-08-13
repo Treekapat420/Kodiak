@@ -29,6 +29,32 @@ type SavedLaunch = {
   symbol?: string;
 };
 
+type GraduationState = {
+  network: string;
+  mint: string;
+  state: "active" | "graduated" | "cancelled" | "unknown";
+  rawStatus: number;
+  migrateType: "cpmm" | "amm";
+  launchpadPoolId: string;
+  platformId: string;
+  cpConfigId: string | null;
+  cpmmPoolId: string | null;
+  bonding: {
+    quoteCollectedRaw: string;
+    quoteTargetRaw: string;
+    progressBps: number;
+    progressPercent: number;
+    thresholdReached: boolean;
+  };
+  trading: {
+    launchpadActive: boolean;
+    graduationReady: boolean;
+    graduated: boolean;
+    cancelled: boolean;
+    cpmmReady: boolean;
+  };
+};
+
 type Status =
   | { kind: "idle"; message: string }
   | { kind: "working"; message: string }
@@ -126,6 +152,10 @@ export default function TradePage() {
     useState<number | null>(null);
   const [estimatedSellSol, setEstimatedSellSol] =
     useState<string | null>(null);
+  const [graduationState, setGraduationState] =
+    useState<GraduationState | null>(null);
+  const [graduationLoading, setGraduationLoading] =
+    useState(false);
 
   const [status, setStatus] = useState<Status>({
     kind: "idle",
@@ -232,6 +262,137 @@ export default function TradePage() {
     status.kind,
   ]);
 
+  const loadGraduationState = async (
+    mint: string,
+    options?: {
+      silent?: boolean;
+    },
+  ) => {
+    if (!mint) {
+      setGraduationState(null);
+      return null;
+    }
+
+    try {
+      if (!options?.silent) {
+        setGraduationLoading(true);
+      }
+
+      const response = await fetch(
+        `/api/token/${encodeURIComponent(
+          mint,
+        )}/graduation`,
+        {
+          cache: "no-store",
+        },
+      );
+
+      const data =
+        (await response.json()) as
+          | GraduationState
+          | {
+              error?: string;
+            };
+
+      if (!response.ok) {
+        throw new Error(
+          "error" in data &&
+          typeof data.error === "string"
+            ? data.error
+            : "Unable to read graduation state.",
+        );
+      }
+
+      const state =
+        data as GraduationState;
+
+      setGraduationState(state);
+
+      if (state.launchpadPoolId) {
+        setPoolIdText(
+          state.launchpadPoolId,
+        );
+      }
+
+      return state;
+    } catch (error) {
+      if (!options?.silent) {
+        setGraduationState(null);
+      }
+
+      throw error;
+    } finally {
+      if (!options?.silent) {
+        setGraduationLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!mintIsValid) {
+      setGraduationState(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const refresh = async () => {
+      try {
+        const response = await fetch(
+          `/api/token/${encodeURIComponent(
+            normalizedMint,
+          )}/graduation`,
+          {
+            cache: "no-store",
+          },
+        );
+
+        if (!response.ok) {
+          return;
+        }
+
+        const state =
+          (await response.json()) as GraduationState;
+
+        if (!cancelled) {
+          setGraduationState(
+            state,
+          );
+
+          if (
+            state.launchpadPoolId
+          ) {
+            setPoolIdText(
+              state.launchpadPoolId,
+            );
+          }
+        }
+      } catch {
+        // Polling is best-effort. Explicit loads still surface errors.
+      }
+    };
+
+    void refresh();
+
+    const timer =
+      window.setInterval(
+        () => {
+          void refresh();
+        },
+        15_000,
+      );
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(
+        timer,
+      );
+    };
+  }, [
+    mintIsValid,
+    normalizedMint,
+  ]);
+
   const loadLastLaunch = () => {
     const raw = window.localStorage.getItem(
       lastLaunchStorageKey,
@@ -271,6 +432,7 @@ export default function TradePage() {
       setEstimatedTokens(null);
       setEstimatedSellSol(null);
       setSellTokens("");
+      setGraduationState(null);
 
       setStatus({
         kind: "idle",
@@ -314,16 +476,74 @@ export default function TradePage() {
       setStatus({
         kind: "working",
         message:
-          `Loading the Raydium LaunchLab pool from ${NETWORK_LABEL}...`,
+          `Reading Kodiak's live LaunchLab/graduation state on ${NETWORK_LABEL}...`,
       });
 
-      const mintA = new PublicKey(normalizedMint);
+      const graduation =
+        await loadGraduationState(
+          normalizedMint,
+        );
 
-      const poolId = getPdaLaunchpadPoolId(
-        KODIAK_LAUNCHPAD_PROGRAM_ID,
-        mintA,
-        NATIVE_MINT,
-      ).publicKey;
+      if (!graduation) {
+        throw new Error(
+          "Kodiak could not read this token's graduation state.",
+        );
+      }
+
+      if (
+        graduation.trading.cancelled
+      ) {
+        setStatus({
+          kind: "error",
+          message:
+            "This LaunchLab pool is cancelled. Bonding-curve trading is disabled.",
+        });
+        return;
+      }
+
+      if (
+        graduation.trading.graduated
+      ) {
+        if (
+          graduation.trading.cpmmReady &&
+          graduation.cpmmPoolId
+        ) {
+          setStatus({
+            kind: "success",
+            message:
+              "This token has graduated from LaunchLab. Kodiak found its Raydium CPMM pool.",
+          });
+        } else {
+          setStatus({
+            kind: "working",
+            message:
+              "This token is graduated. Kodiak is waiting for the resulting Raydium CPMM pool to become available.",
+          });
+        }
+
+        return;
+      }
+
+      if (
+        graduation.trading.graduationReady
+      ) {
+        setStatus({
+          kind: "working",
+          message:
+            "Bonding target reached. LaunchLab curve trading is paused while this token is ready for graduation.",
+        });
+        return;
+      }
+
+      const mintA =
+        new PublicKey(
+          normalizedMint,
+        );
+
+      const poolId =
+        new PublicKey(
+          graduation.launchpadPoolId,
+        );
 
       const raydium = await loadKodiakRaydium({
         connection,
@@ -332,9 +552,13 @@ export default function TradePage() {
         signAllTransactions,
       });
 
-      await raydium.launchpad.getRpcPoolInfo({ poolId });
+      await raydium.launchpad.getRpcPoolInfo({
+        poolId,
+      });
 
-      setPoolIdText(poolId.toBase58());
+      setPoolIdText(
+        poolId.toBase58(),
+      );
 
       setStatus({
         kind: "success",
@@ -433,6 +657,60 @@ export default function TradePage() {
         kind: "error",
         message:
           `Enter or load a valid ${NETWORK_LABEL} mint first.`,
+      });
+      return;
+    }
+
+    try {
+      const graduation =
+        await loadGraduationState(
+          normalizedMint,
+          {
+            silent: true,
+          },
+        );
+
+      if (
+        graduation?.trading.graduated
+      ) {
+        setStatus({
+          kind: "error",
+          message:
+            graduation.trading.cpmmReady
+              ? "This token has graduated. Bonding-curve buys are disabled; CPMM trading will be used next."
+              : "This token has graduated and Kodiak is waiting for its CPMM pool.",
+        });
+        return;
+      }
+
+      if (
+        graduation?.trading.graduationReady
+      ) {
+        setStatus({
+          kind: "error",
+          message:
+            "This token has reached its bonding target. Curve buys are disabled while graduation completes.",
+        });
+        return;
+      }
+
+      if (
+        graduation?.trading.cancelled
+      ) {
+        setStatus({
+          kind: "error",
+          message:
+            "This LaunchLab pool is cancelled.",
+        });
+        return;
+      }
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Kodiak could not verify the token's graduation state.",
       });
       return;
     }
@@ -639,6 +917,60 @@ export default function TradePage() {
         kind: "error",
         message:
           `Enter or load a valid ${NETWORK_LABEL} mint first.`,
+      });
+      return;
+    }
+
+    try {
+      const graduation =
+        await loadGraduationState(
+          normalizedMint,
+          {
+            silent: true,
+          },
+        );
+
+      if (
+        graduation?.trading.graduated
+      ) {
+        setStatus({
+          kind: "error",
+          message:
+            graduation.trading.cpmmReady
+              ? "This token has graduated. Bonding-curve sells are disabled; CPMM trading will be used next."
+              : "This token has graduated and Kodiak is waiting for its CPMM pool.",
+        });
+        return;
+      }
+
+      if (
+        graduation?.trading.graduationReady
+      ) {
+        setStatus({
+          kind: "error",
+          message:
+            "This token has reached its bonding target. Curve sells are disabled while graduation completes.",
+        });
+        return;
+      }
+
+      if (
+        graduation?.trading.cancelled
+      ) {
+        setStatus({
+          kind: "error",
+          message:
+            "This LaunchLab pool is cancelled.",
+        });
+        return;
+      }
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Kodiak could not verify the token's graduation state.",
       });
       return;
     }
@@ -919,10 +1251,10 @@ export default function TradePage() {
                 Kodiak {NETWORK_LABEL}
               </p>
               <h1 className="mt-2 text-4xl font-black">
-                Bonding Curve Trade
+                Kodiak Trade
               </h1>
               <p className="mt-3 max-w-xl text-zinc-400">
-                Trade on Raydium LaunchLab through Kodiak on {NETWORK_LABEL}.
+                Trade through Kodiak on {NETWORK_LABEL}. LaunchLab is used before graduation and Raydium CPMM after graduation.
               </p>
             </div>
 
@@ -952,6 +1284,7 @@ export default function TradePage() {
                 setEstimatedTokens(null);
                 setEstimatedSellSol(null);
                 setSellTokens("");
+                setGraduationState(null);
               }}
               placeholder={`Paste a ${NETWORK_LABEL} LaunchLab mint`}
               className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 font-mono text-sm outline-none focus:border-emerald-400/50"
@@ -974,14 +1307,115 @@ export default function TradePage() {
             onClick={() => void loadPool()}
             disabled={
               status.kind === "working" ||
+              graduationLoading ||
               !connected ||
               !mintIsValid
             }
             className="mt-5 w-full rounded-2xl border border-emerald-400/30 px-5 py-4 font-black text-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Load {NETWORK_LABEL} Bonding Curve
+            Refresh {NETWORK_LABEL} Trading State
           </button>
         </section>
+
+        {graduationState && (
+          <section
+            className={`rounded-3xl border p-6 ${
+              graduationState.trading.graduated
+                ? "border-amber-300/30 bg-amber-300/[0.06]"
+                : graduationState.trading.graduationReady
+                  ? "border-amber-300/30 bg-amber-300/[0.06]"
+                  : graduationState.trading.cancelled
+                    ? "border-red-400/25 bg-red-400/[0.06]"
+                    : "border-emerald-400/20 bg-emerald-400/[0.04]"
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-zinc-500">
+                  Trading lifecycle
+                </p>
+
+                <h2 className="mt-2 text-2xl font-black">
+                  {graduationState.trading.graduated
+                    ? "Graduated to Raydium CPMM"
+                    : graduationState.trading.graduationReady
+                      ? "Graduation ready"
+                      : graduationState.trading.cancelled
+                        ? "Launch cancelled"
+                        : "LaunchLab bonding curve"}
+                </h2>
+              </div>
+
+              <span className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-black uppercase">
+                {graduationState.state}
+              </span>
+            </div>
+
+            <div className="mt-5">
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span className="text-zinc-500">
+                  Bonding progress
+                </span>
+
+                <span className="font-black">
+                  {Math.min(
+                    100,
+                    graduationState.bonding.progressPercent,
+                  ).toFixed(2)}
+                  %
+                </span>
+              </div>
+
+              <div className="mt-2 h-3 overflow-hidden rounded-full bg-white/[0.07]">
+                <div
+                  className="h-full bg-emerald-400"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      graduationState.bonding.progressPercent,
+                    )}%`,
+                  }}
+                />
+              </div>
+            </div>
+
+            {graduationState.cpmmPoolId && (
+              <div className="mt-5 rounded-2xl border border-amber-300/20 bg-black/25 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.14em] text-amber-300">
+                  Raydium CPMM pool
+                </p>
+
+                <p className="mt-2 break-all font-mono text-xs">
+                  {graduationState.cpmmPoolId}
+                </p>
+
+                <a
+                  href={kodiakExplorerAddressUrl(
+                    graduationState.cpmmPoolId,
+                  )}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-3 inline-block text-sm font-black text-amber-300"
+                >
+                  View CPMM pool
+                </a>
+              </div>
+            )}
+
+            {graduationState.trading.graduated &&
+              !graduationState.trading.cpmmReady && (
+                <p className="mt-4 text-sm leading-6 text-amber-200">
+                  Graduation is confirmed on-chain. Kodiak is waiting for the CPMM pool account to be discoverable before enabling post-graduation trading.
+                </p>
+              )}
+
+            {graduationState.trading.graduationReady && (
+              <p className="mt-4 text-sm leading-6 text-amber-200">
+                The bonding target has been reached. Kodiak has disabled curve trading so no new LaunchLab order is prepared during the graduation transition.
+              </p>
+            )}
+          </section>
+        )}
 
         <section className="rounded-3xl border border-white/10 bg-white/[0.03] p-6">
           <div className="mb-5 grid grid-cols-2 rounded-2xl border border-white/10 bg-black/30 p-1">
@@ -1065,13 +1499,21 @@ export default function TradePage() {
                 disabled={
                   status.kind === "working" ||
                   !connected ||
-                  !mintIsValid
+                  !mintIsValid ||
+                  Boolean(
+                    graduationState &&
+                      !graduationState.trading.launchpadActive,
+                  )
                 }
                 className="mt-5 w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {status.kind === "working"
                   ? `Preparing ${NETWORK_LABEL} buy...`
-                  : "Buy on Bonding Curve"}
+                  : graduationState?.trading.graduated
+                    ? "CPMM Buy Coming Next"
+                    : graduationState?.trading.graduationReady
+                      ? "Graduation in Progress"
+                      : "Buy on Bonding Curve"}
               </button>
             </>
           ) : (
@@ -1156,6 +1598,10 @@ export default function TradePage() {
                   status.kind === "working" ||
                   !connected ||
                   !mintIsValid ||
+                  Boolean(
+                    graduationState &&
+                      !graduationState.trading.launchpadActive,
+                  ) ||
                   !sellTokens ||
                   tokenBalance === null ||
                   tokenBalance <= 0
@@ -1164,7 +1610,11 @@ export default function TradePage() {
               >
                 {status.kind === "working"
                   ? `Preparing ${NETWORK_LABEL} sell...`
-                  : "Sell on Bonding Curve"}
+                  : graduationState?.trading.graduated
+                    ? "CPMM Sell Coming Next"
+                    : graduationState?.trading.graduationReady
+                      ? "Graduation in Progress"
+                      : "Sell on Bonding Curve"}
               </button>
             </>
           )}

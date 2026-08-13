@@ -83,7 +83,7 @@ function progressBps(
     const target =
       BigInt(targetB);
 
-    if (target <= 0n) {
+    if (target <= BigInt(0)) {
       return 0;
     }
 

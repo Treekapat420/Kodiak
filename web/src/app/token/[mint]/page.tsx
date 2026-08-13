@@ -29,6 +29,32 @@ type TokenPayload = {
   error?: string;
 };
 
+type GraduationState = {
+  network: string;
+  mint: string;
+  state: "active" | "graduated" | "cancelled" | "unknown";
+  rawStatus: number;
+  migrateType: "cpmm" | "amm";
+  launchpadPoolId: string;
+  platformId: string;
+  cpConfigId: string | null;
+  cpmmPoolId: string | null;
+  bonding: {
+    quoteCollectedRaw: string;
+    quoteTargetRaw: string;
+    progressBps: number;
+    progressPercent: number;
+    thresholdReached: boolean;
+  };
+  trading: {
+    launchpadActive: boolean;
+    graduationReady: boolean;
+    graduated: boolean;
+    cancelled: boolean;
+    cpmmReady: boolean;
+  };
+};
+
 const NETWORK_LABEL =
   kodiakNetworkLabel();
 
@@ -84,6 +110,14 @@ export default function TokenPage() {
     copied,
     setCopied,
   ] = useState(false);
+
+  const [
+    graduation,
+    setGraduation,
+  ] =
+    useState<GraduationState | null>(
+      null,
+    );
 
   useEffect(() => {
     let cancelled =
@@ -161,6 +195,68 @@ export default function TokenPage() {
 
     return () => {
       cancelled = true;
+    };
+  }, [mint]);
+
+  useEffect(() => {
+    if (!mint) {
+      return;
+    }
+
+    let cancelled =
+      false;
+
+    const loadGraduation =
+      async () => {
+        try {
+          const response =
+            await fetch(
+              `/api/token/${encodeURIComponent(
+                mint,
+              )}/graduation`,
+              {
+                cache:
+                  "no-store",
+              },
+            );
+
+          if (!response.ok) {
+            return;
+          }
+
+          const payload =
+            (await response.json()) as GraduationState;
+
+          if (
+            !cancelled &&
+            payload.network ===
+              KODIAK_NETWORK
+          ) {
+            setGraduation(
+              payload,
+            );
+          }
+        } catch {
+          // Graduation polling is best-effort so the token page remains usable.
+        }
+      };
+
+    void loadGraduation();
+
+    const timer =
+      window.setInterval(
+        () => {
+          void loadGraduation();
+        },
+        15_000,
+      );
+
+    return () => {
+      cancelled = true;
+
+      window.clearInterval(
+        timer,
+      );
     };
   }, [mint]);
 
@@ -243,7 +339,9 @@ export default function TokenPage() {
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="min-w-0">
               <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-300">
-                Kodiak LaunchLab
+                {graduation?.trading.graduated
+                  ? "Kodiak Â· Raydium CPMM"
+                  : "Kodiak LaunchLab"}
                 {" | "}
                 {NETWORK_LABEL}
               </p>
@@ -413,37 +511,115 @@ export default function TokenPage() {
               </div>
             </section>
 
-            <section className="rounded-3xl border border-white/10 bg-white/[0.025] p-5">
+            <section
+              className={`rounded-3xl border p-5 ${
+                graduation?.trading.graduated
+                  ? "border-amber-300/25 bg-amber-300/[0.05]"
+                  : graduation?.trading.graduationReady
+                    ? "border-amber-300/25 bg-amber-300/[0.05]"
+                    : graduation?.trading.cancelled
+                      ? "border-red-400/25 bg-red-400/[0.05]"
+                      : "border-white/10 bg-white/[0.025]"
+              }`}
+            >
               <p className="text-xs font-black uppercase tracking-[0.18em] text-zinc-500">
-                Bonding progress
+                Launch lifecycle
               </p>
 
               <h2 className="mt-2 text-xl font-black">
-                Indexer
-                connection next
+                {graduation?.trading.graduated
+                  ? "Graduated to Raydium CPMM"
+                  : graduation?.trading.graduationReady
+                    ? "Graduation ready"
+                    : graduation?.trading.cancelled
+                      ? "Launch cancelled"
+                      : "LaunchLab bonding curve"}
               </h2>
 
-              <div className="mt-4 h-3 overflow-hidden rounded-full bg-white/[0.06]">
-                <div className="h-full w-0 rounded-full bg-gradient-to-r from-emerald-400 to-amber-300" />
-              </div>
+              {graduation ? (
+                <>
+                  <div className="mt-5 flex items-center justify-between gap-4 text-sm">
+                    <span className="text-zinc-500">
+                      Bonding progress
+                    </span>
 
-              <p className="mt-4 text-sm leading-6 text-zinc-500">
-                Kodiak will
-                display verified
-                SOL raised,
-                remaining SOL,
-                bonding
-                percentage,
-                liquidity,
-                holders, and
-                market cap here
-                once those
-                on-chain
-                indexers are
-                connected. No
-                invented values
-                are shown.
-              </p>
+                    <span className="font-black">
+                      {Math.min(
+                        100,
+                        graduation.bonding.progressPercent,
+                      ).toFixed(2)}
+                      %
+                    </span>
+                  </div>
+
+                  <div className="mt-2 h-3 overflow-hidden rounded-full bg-white/[0.06]">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-amber-300"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          graduation.bonding.progressPercent,
+                        )}%`,
+                      }}
+                    />
+                  </div>
+
+                  <div className="mt-5 space-y-3 text-sm">
+                    <DetailRow
+                      label="State"
+                      value={
+                        graduation.trading.graduated
+                          ? "Graduated"
+                          : graduation.trading.graduationReady
+                            ? "Graduation ready"
+                            : graduation.trading.cancelled
+                              ? "Cancelled"
+                              : "Bonding"
+                      }
+                    />
+
+                    <DetailRow
+                      label="Migration"
+                      value={
+                        graduation.migrateType ===
+                        "cpmm"
+                          ? "Raydium CPMM"
+                          : "Raydium AMM"
+                      }
+                    />
+                  </div>
+
+                  {graduation.cpmmPoolId && (
+                    <a
+                      href={kodiakExplorerAddressUrl(
+                        graduation.cpmmPoolId,
+                      )}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-5 block rounded-xl border border-amber-300/20 px-4 py-3 text-center text-sm font-black text-amber-300"
+                    >
+                      View graduated CPMM pool
+                    </a>
+                  )}
+
+                  {graduation.trading.graduationReady && (
+                    <p className="mt-4 text-sm leading-6 text-amber-200">
+                      The bonding target has been reached. Kodiak is waiting for the on-chain graduation transition before routing trading to CPMM.
+                    </p>
+                  )}
+
+                  {graduation.trading.graduated &&
+                    !graduation.trading.cpmmReady && (
+                      <p className="mt-4 text-sm leading-6 text-amber-200">
+                        Graduation is confirmed. Kodiak is waiting for the CPMM pool account to become available.
+                      </p>
+                    )}
+                </>
+              ) : (
+                <p className="mt-4 text-sm leading-6 text-zinc-500">
+                  Reading verified LaunchLab state from Solana...
+                </p>
+              )}
             </section>
 
             <section className="rounded-3xl border border-white/10 bg-white/[0.025] p-5">
@@ -460,7 +636,15 @@ export default function TokenPage() {
 
                 <DetailRow
                   label="Status"
-                  value="Verified launch"
+                  value={
+                    graduation?.trading.graduated
+                      ? "Verified Â· Graduated"
+                      : graduation?.trading.graduationReady
+                        ? "Verified Â· Graduation ready"
+                        : graduation?.trading.cancelled
+                          ? "Verified Â· Cancelled"
+                          : "Verified launch"
+                  }
                 />
 
                 <DetailRow

@@ -7,12 +7,15 @@ import {
   Connection,
   LAMPORTS_PER_SOL,
   PublicKey,
+  TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
 import {
   LAUNCHPAD_PROGRAM,
+  PlatformConfig,
   Raydium,
   TxVersion,
+  updatePlatformConfig,
 } from "@raydium-io/raydium-sdk-v2";
 import {
   useConnection,
@@ -66,6 +69,9 @@ const CREATOR_FEE_RATE = 4_500;
 const PLATFORM_LP_SCALE = 0;
 const CREATOR_LP_SCALE = 100_000;
 const BURN_LP_SCALE = 900_000;
+
+const KODIAK_MAINNET_PLATFORM_ID =
+  "5d63yX2vRpyS2BPFwJJB15tMmctWCKwiKychEjP3gy4W";
 
 const NETWORK_LABEL = kodiakNetworkLabel();
 
@@ -370,6 +376,254 @@ export default function PlatformSetupPage() {
   const canCreate =
     canCreateDevnet ||
     canCreateIsolatedMainnet;
+
+  async function updateMainnetCpmmConfig() {
+    if (!MAINNET_SETUP_READY) {
+      setStatus({
+        kind: "error",
+        message:
+          "The isolated Mainnet setup environment is not armed.",
+      });
+      return;
+    }
+
+    if (
+      !connected ||
+      !publicKey ||
+      !signTransaction
+    ) {
+      setStatus({
+        kind: "error",
+        message:
+          "Connect Kodiak's configured Mainnet platform admin wallet first.",
+      });
+      return;
+    }
+
+    if (
+      publicKey.toBase58() !==
+      MAINNET_PLATFORM_ADMIN_WALLET
+    ) {
+      setStatus({
+        kind: "error",
+        message:
+          "The connected wallet is not Kodiak's configured Mainnet platform admin.",
+      });
+      return;
+    }
+
+    if (!mainnetSetupConnection) {
+      setStatus({
+        kind: "error",
+        message:
+          "Kodiak's dedicated Mainnet RPC is unavailable on this setup page.",
+      });
+      return;
+    }
+
+    try {
+      setStatus({
+        kind: "working",
+        message:
+          "Reading Kodiak's current Mainnet PlatformConfig...",
+      });
+
+      const platformId =
+        new PublicKey(
+          KODIAK_MAINNET_PLATFORM_ID,
+        );
+
+      const targetCpConfigId =
+        new PublicKey(
+          KODIAK_MAINNET_CPMM_CONFIG_ID,
+        );
+
+      const platformAccount =
+        await mainnetSetupConnection.getAccountInfo(
+          platformId,
+          "confirmed",
+        );
+
+      if (!platformAccount) {
+        throw new Error(
+          "Kodiak's Mainnet PlatformConfig account was not found.",
+        );
+      }
+
+      const platformInfo =
+        PlatformConfig.decode(
+          platformAccount.data,
+        );
+
+      const currentCpConfigId =
+        platformInfo.cpConfigId.toBase58();
+
+      if (
+        currentCpConfigId ===
+        targetCpConfigId.toBase58()
+      ) {
+        setStatus({
+          kind: "success",
+          message:
+            "Kodiak's Mainnet PlatformConfig already points to CPMM index 8.",
+          platformId:
+            platformId.toBase58(),
+        });
+        return;
+      }
+
+      const instruction =
+        updatePlatformConfig(
+          LAUNCHPAD_PROGRAM,
+          publicKey,
+          platformId,
+          {
+            type:
+              "updateCpConfigId",
+            value:
+              targetCpConfigId,
+          },
+        );
+
+      const latestBlockhash =
+        await mainnetSetupConnection.getLatestBlockhash(
+          "confirmed",
+        );
+
+      const message =
+        new TransactionMessage({
+          payerKey:
+            publicKey,
+          recentBlockhash:
+            latestBlockhash.blockhash,
+          instructions: [
+            instruction,
+          ],
+        }).compileToV0Message();
+
+      const transaction =
+        new VersionedTransaction(
+          message,
+        );
+
+      setStatus({
+        kind: "working",
+        message:
+          "Simulating the Mainnet PlatformConfig update before wallet approval...",
+      });
+
+      const simulation =
+        await mainnetSetupConnection.simulateTransaction(
+          transaction,
+          {
+            commitment:
+              "confirmed",
+            sigVerify:
+              false,
+          },
+        );
+
+      if (simulation.value.err) {
+        setStatus({
+          kind: "error",
+          message:
+            `Mainnet update simulation failed: ${JSON.stringify(
+              simulation.value.err,
+            )}`,
+          logs:
+            simulation.value.logs ??
+            [],
+        });
+        return;
+      }
+
+      setStatus({
+        kind: "working",
+        message:
+          "Simulation passed. Approve the CPMM index 8 update in the Mainnet admin wallet.",
+      });
+
+      const signed =
+        await signTransaction(
+          transaction,
+        );
+
+      const signature =
+        await mainnetSetupConnection.sendRawTransaction(
+          signed.serialize(),
+          {
+            skipPreflight:
+              false,
+            maxRetries:
+              5,
+          },
+        );
+
+      setStatus({
+        kind: "working",
+        message:
+          "Mainnet update submitted. Waiting for confirmation...",
+      });
+
+      await mainnetSetupConnection.confirmTransaction(
+        {
+          signature,
+          blockhash:
+            latestBlockhash.blockhash,
+          lastValidBlockHeight:
+            latestBlockhash.lastValidBlockHeight,
+        },
+        "confirmed",
+      );
+
+      const updatedAccount =
+        await mainnetSetupConnection.getAccountInfo(
+          platformId,
+          "confirmed",
+        );
+
+      if (!updatedAccount) {
+        throw new Error(
+          "The update confirmed, but Kodiak could not reload the PlatformConfig.",
+        );
+      }
+
+      const updatedInfo =
+        PlatformConfig.decode(
+          updatedAccount.data,
+        );
+
+      if (
+        updatedInfo.cpConfigId.toBase58() !==
+        targetCpConfigId.toBase58()
+      ) {
+        throw new Error(
+          "The transaction confirmed, but the PlatformConfig does not show CPMM index 8 yet.",
+        );
+      }
+
+      setCpConfigId(
+        targetCpConfigId.toBase58(),
+      );
+
+      setStatus({
+        kind: "success",
+        message:
+          "Kodiak Mainnet PlatformConfig now points to Raydium CPMM index 8.",
+        platformId:
+          platformId.toBase58(),
+        signature,
+      });
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unable to update Kodiak's Mainnet CPMM configuration.",
+      });
+    }
+  }
 
   async function createPlatform() {
     if (
@@ -831,7 +1085,7 @@ export default function PlatformSetupPage() {
                       {KODIAK_MAINNET_CPMM_CONFIG_ID}
                     </p>
                     <p className="mt-2 text-xs leading-5 text-zinc-500">
-                      Raydium Mainnet CPMM index 0 - 0.25% trading fee tier.
+                      Raydium Mainnet CPMM index 8 - 0.25% base + 0.55% creator fee.
                     </p>
                   </div>
 
@@ -986,6 +1240,63 @@ export default function PlatformSetupPage() {
                       : "Mainnet PlatformConfig creation is locked until Kodiak's production configuration is intentionally enabled."}
                 </span>
               </label>
+
+              {KODIAK_MAINNET_REQUESTED_BUT_LOCKED &&
+                MAINNET_SETUP_READY && (
+                  <div className="rounded-2xl border border-amber-300/25 bg-amber-300/[0.05] p-5">
+                    <p className="text-xs font-black uppercase tracking-[0.16em] text-amber-300">
+                      Mainnet fee migration
+                    </p>
+
+                    <h3 className="mt-2 text-lg font-black">
+                      Move Kodiak to CPMM index 8
+                    </h3>
+
+                    <p className="mt-2 text-sm leading-6 text-zinc-400">
+                      This updates the existing Kodiak Mainnet PlatformConfig in place.
+                      It does not recreate the platform and does not enable Kodiak
+                      Mainnet trading.
+                    </p>
+
+                    <div className="mt-4 grid gap-2 text-xs text-zinc-500">
+                      <p className="break-all">
+                        PlatformConfig: {KODIAK_MAINNET_PLATFORM_ID}
+                      </p>
+
+                      <p className="break-all">
+                        Target CPMM config: {KODIAK_MAINNET_CPMM_CONFIG_ID}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={
+                        !connected ||
+                        !publicKey ||
+                        publicKey.toBase58() !==
+                          MAINNET_PLATFORM_ADMIN_WALLET ||
+                        status.kind === "working"
+                      }
+                      onClick={() =>
+                        void updateMainnetCpmmConfig()
+                      }
+                      className="mt-4 w-full rounded-xl bg-amber-300 px-5 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {status.kind === "working"
+                        ? "Working..."
+                        : "Update Mainnet CPMM to index 8"}
+                    </button>
+
+                    {connected &&
+                      publicKey &&
+                      publicKey.toBase58() !==
+                        MAINNET_PLATFORM_ADMIN_WALLET && (
+                        <p className="mt-3 text-xs font-bold text-rose-300">
+                          Connect Kodiak&apos;s configured Mainnet platform admin wallet to use this control.
+                        </p>
+                      )}
+                  </div>
+                )}
 
               {!connected ? (
                 <div className="flex justify-center">

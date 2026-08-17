@@ -3,7 +3,7 @@ import { clusterApiUrl } from "@solana/web3.js";
 export type KodiakNetwork = "devnet" | "mainnet";
 
 export const KODIAK_MAINNET_CPMM_CONFIG_ID =
-  "D4FPEruKEHrG5TenZ2mpDGEfu1iUvTiqBxvpU8HLBvC2";
+  "EUZHCdd8H7nueb2wLpxUqyuemdbe8TUxfCWcxVfARvgw";
 
 function requestedNetwork(): KodiakNetwork {
   const value =

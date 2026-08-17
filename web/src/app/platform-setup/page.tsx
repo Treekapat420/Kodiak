@@ -485,25 +485,30 @@ export default function PlatformSetupPage() {
           },
         );
 
-      const latestBlockhash =
+      /*
+       * Simulate first using a disposable recent blockhash. We explicitly ask
+       * Solana to replace that blockhash during simulation so wallet approval
+       * time cannot make the simulation blockhash stale.
+       */
+      const simulationBlockhash =
         await mainnetSetupConnection.getLatestBlockhash(
           "confirmed",
         );
 
-      const message =
+      const simulationMessage =
         new TransactionMessage({
           payerKey:
             publicKey,
           recentBlockhash:
-            latestBlockhash.blockhash,
+            simulationBlockhash.blockhash,
           instructions: [
             instruction,
           ],
         }).compileToV0Message();
 
-      const transaction =
+      const simulationTransaction =
         new VersionedTransaction(
-          message,
+          simulationMessage,
         );
 
       setStatus({
@@ -514,10 +519,12 @@ export default function PlatformSetupPage() {
 
       const simulation =
         await mainnetSetupConnection.simulateTransaction(
-          transaction,
+          simulationTransaction,
           {
             commitment:
               "confirmed",
+            replaceRecentBlockhash:
+              true,
             sigVerify:
               false,
           },
@@ -537,16 +544,62 @@ export default function PlatformSetupPage() {
         return;
       }
 
+      /*
+       * IMPORTANT: fetch a brand-new blockhash only after simulation has
+       * passed. The previous version reused the simulation blockhash for the
+       * wallet transaction, which could expire while the wallet approval UI
+       * was open and produce "Blockhash not found".
+       */
+      const signingBlockhash =
+        await mainnetSetupConnection.getLatestBlockhash(
+          "finalized",
+        );
+
+      const signingMessage =
+        new TransactionMessage({
+          payerKey:
+            publicKey,
+          recentBlockhash:
+            signingBlockhash.blockhash,
+          instructions: [
+            instruction,
+          ],
+        }).compileToV0Message();
+
+      const transactionToSign =
+        new VersionedTransaction(
+          signingMessage,
+        );
+
       setStatus({
         kind: "working",
         message:
-          "Simulation passed. Approve the CPMM index 8 update in the Mainnet admin wallet.",
+          "Simulation passed. A fresh Mainnet blockhash is loaded. Approve the CPMM index 8 update in the admin wallet.",
       });
 
       const signed =
         await signTransaction(
-          transaction,
+          transactionToSign,
         );
+
+      /*
+       * Do a final block-height check before sending. This cannot refresh a
+       * signed transaction, but it prevents Kodiak from submitting one that
+       * is already known to be expired.
+       */
+      const currentBlockHeight =
+        await mainnetSetupConnection.getBlockHeight(
+          "confirmed",
+        );
+
+      if (
+        currentBlockHeight >
+        signingBlockhash.lastValidBlockHeight
+      ) {
+        throw new Error(
+          "Wallet approval took too long and the Solana blockhash expired. Tap the update button again and approve promptly; no transaction was sent.",
+        );
+      }
 
       const signature =
         await mainnetSetupConnection.sendRawTransaction(
@@ -554,6 +607,8 @@ export default function PlatformSetupPage() {
           {
             skipPreflight:
               false,
+            preflightCommitment:
+              "confirmed",
             maxRetries:
               5,
           },
@@ -569,9 +624,9 @@ export default function PlatformSetupPage() {
         {
           signature,
           blockhash:
-            latestBlockhash.blockhash,
+            signingBlockhash.blockhash,
           lastValidBlockHeight:
-            latestBlockhash.lastValidBlockHeight,
+            signingBlockhash.lastValidBlockHeight,
         },
         "confirmed",
       );

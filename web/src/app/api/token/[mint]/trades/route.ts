@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 
 import {
-  discoverTradeIdentity,
-  getRecentPoolSignatures,
   getTrades,
   inferTokenAmount,
   saveTrade,
   type StoredTrade,
 } from "@/lib/devnet-market";
+import {
+  getSyncedTrades,
+} from "@/lib/market-sync";
 import { recordCreatorReward } from "@/lib/creator-rewards";
 import {
   KODIAK_NETWORK,
@@ -73,97 +74,10 @@ export async function GET(
         "Token mint",
       ).toBase58();
 
-    let trades =
-      await getTrades(
+    const trades =
+      await getSyncedTrades(
         mint,
       );
-
-    /*
-     * Reconcile the newest on-chain pool transaction before returning trades.
-     * This makes Kodiak discover a trade even when it was submitted from
-     * Phantom, Jupiter, Raydium, or another interface instead of Kodiak.
-     *
-     * We intentionally reconcile one missing transaction per request. The
-     * chart polls this endpoint every three seconds, which keeps the curve
-     * price transition ordered and avoids inventing historical OHLC values.
-     */
-    try {
-      const known = new Set(
-        trades.map((trade) => trade.signature),
-      );
-
-      const signatures = await getRecentPoolSignatures(mint, 25);
-      for (const missing of signatures) {
-        if (missing.err || known.has(missing.signature)) continue;
-
-        const identity = await discoverTradeIdentity(
-          missing.signature,
-          mint,
-        );
-
-        if (identity) {
-          const inferred = await inferTokenAmount(
-            missing.signature,
-            mint,
-            identity.wallet,
-            identity.side,
-          );
-
-          const solAmount = Number(inferred.quoteAmountSol);
-          const closePriceSol = Number(inferred.closePriceSol);
-          const previousClose = Number(trades.at(-1)?.closePriceSol);
-          const inferredOpen = Number(inferred.openPriceSol);
-          const openPriceSol =
-            inferred.marketType === "cpmm"
-              ? inferredOpen
-              : Number.isFinite(previousClose) && previousClose > 0
-                ? previousClose
-                : inferredOpen;
-
-          if (
-            Number.isFinite(inferred.tokenAmount) &&
-            inferred.tokenAmount > 0 &&
-            Number.isFinite(solAmount) &&
-            solAmount > 0 &&
-            Number.isFinite(openPriceSol) &&
-            openPriceSol > 0 &&
-            Number.isFinite(closePriceSol) &&
-            closePriceSol > 0 &&
-            (identity.side === "buy"
-              ? closePriceSol > openPriceSol
-              : closePriceSol < openPriceSol)
-          ) {
-            const saved = await saveTrade({
-              mint,
-              wallet: identity.wallet,
-              signature: missing.signature,
-              side: identity.side,
-              solAmount,
-              tokenAmount: inferred.tokenAmount,
-              priceSol: solAmount / inferred.tokenAmount,
-              openPriceSol,
-              closePriceSol,
-              timestamp: inferred.timestamp,
-            });
-
-            try {
-              await recordCreatorReward(saved);
-            } catch (rewardError) {
-              console.error(
-                "External creator reward ledger write failed:",
-                rewardError,
-              );
-            }
-
-            trades = await getTrades(mint);
-            break;
-          }
-        }
-      }
-    } catch (syncError) {
-      // Market reads must remain available even if reconciliation is delayed.
-      console.error("External trade reconciliation delayed:", syncError);
-    }
 
     return NextResponse.json(
       {

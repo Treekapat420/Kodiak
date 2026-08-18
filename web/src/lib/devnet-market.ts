@@ -1,822 +1,851 @@
-import { Connection, PublicKey } from "@solana/web3.js";
+import { getPdaPlatformVault } from "@raydium-io/raydium-sdk-v2";
 import { NATIVE_MINT } from "@solana/spl-token";
 import {
-  Curve,
-  getPdaLaunchpadPoolId,
-  LaunchpadConfig,
-  LaunchpadPool,
-} from "@raydium-io/raydium-sdk-v2";
+  Connection,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  type ParsedTransactionWithMeta,
+  type VersionedTransactionResponse,
+} from "@solana/web3.js";
+import { NextRequest, NextResponse } from "next/server";
 
-import {
-  KODIAK_LAUNCHPAD_PROGRAM_ID,
-} from "@/lib/raydium/devnet";
+import { isKodiakAdminWallet } from "@/lib/admin";
+import { KODIAK_LAUNCHPAD_PROGRAM_ID } from "@/lib/raydium/devnet";
 import {
   KODIAK_IS_DEVNET,
-  KODIAK_IS_MAINNET,
   KODIAK_NETWORK,
   KODIAK_RPC_URL,
 } from "@/lib/solana/network";
+import { getRedis } from "@/lib/server/redis";
 
-export type StoredTrade = {
-  mint: string;
-  wallet: string;
-  signature: string;
-  side: "buy" | "sell";
-  solAmount: number;
-  tokenAmount: number;
-  priceSol: number;
-  openPriceSol?: number;
-  closePriceSol?: number;
-  timestamp: number;
-};
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-type InferredTrade = {
-  tokenAmount: number;
-  timestamp: number;
-  openPriceSol?: number;
-  closePriceSol?: number;
-  slot?: number;
-};
+const CONFIG_KEY =
+  `kodiak:config:v2:${KODIAK_NETWORK}`;
 
-type TokenBalance = {
-  accountIndex: number;
-  mint: string;
-  owner?: string;
-  amount: number;
-};
+const CLAIMED_LAMPORTS_KEY =
+  `kodiak:admin:revenue:claimed-lamports:v3:${KODIAK_NETWORK}`;
 
-function serverRpcUrl() {
-  if (KODIAK_IS_MAINNET) {
-    return (
-      process.env.SOLANA_MAINNET_RPC_URL?.trim() ||
-      process.env.SOLANA_RPC_URL?.trim() ||
-      KODIAK_RPC_URL
-    );
-  }
+const CLAIM_COUNT_KEY =
+  `kodiak:admin:revenue:claim-count:v3:${KODIAK_NETWORK}`;
 
-  return (
-    process.env.SOLANA_DEVNET_RPC_URL?.trim() ||
-    process.env.SOLANA_RPC_URL?.trim() ||
-    KODIAK_RPC_URL
+const LAST_SIGNATURE_KEY =
+  `kodiak:admin:revenue:last-signature:v3:${KODIAK_NETWORK}`;
+
+const UPDATED_AT_KEY =
+  `kodiak:admin:revenue:updated-at:v3:${KODIAK_NETWORK}`;
+
+const CLAIM_SIGNATURE_PREFIX =
+  `kodiak:admin:revenue:claim-signature:v3:${KODIAK_NETWORK}:`;
+
+const SUCCESS_FUND_TRANSFERRED_LAMPORTS_KEY =
+  `kodiak:admin:revenue:success-fund-transferred-lamports:v2:${KODIAK_NETWORK}`;
+
+const SUCCESS_FUND_LAST_TRANSFER_SIGNATURE_KEY =
+  `kodiak:admin:revenue:success-fund-last-transfer-signature:v2:${KODIAK_NETWORK}`;
+
+const SUCCESS_FUND_TRANSFER_SIGNATURE_PREFIX =
+  `kodiak:admin:revenue:success-fund-transfer-signature:v2:${KODIAK_NETWORK}:`;
+
+const DEVNET_PLATFORM_ID =
+  "D33yYxh4JRtdeyLq7sFD8MzSjdtUa3uNFsSk39QHY8yT";
+
+const MAINNET_PLATFORM_ID =
+  "5d63yX2vRpyS2BPFwJJB15tMmctWCKwiKychEjP3gy4W";
+
+const CREATOR_SUCCESS_FUND_WALLET =
+  "EJeXJ7Bf6nyJ2p4i7kR8Wyfdmi3JgpdU3iDRMCzZheWG";
+
+const CREATOR_SUCCESS_FUND_BPS = 500;
+const BPS_DENOMINATOR = 10_000;
+
+function networkLabel() {
+  return KODIAK_IS_DEVNET ? "Devnet" : "Mainnet";
+}
+
+function createVerificationConnection() {
+  return new Connection(
+    KODIAK_RPC_URL,
+    "confirmed",
   );
 }
 
-const connection = new Connection(
-  serverRpcUrl(),
-  "confirmed",
-);
-
-function getLaunchpadProgramId() {
-  /*
-   * KODIAK_LAUNCHPAD_PROGRAM_ID is network-aware:
-   * - Devnet -> Raydium LaunchLab Devnet program
-   * - Mainnet -> Raydium LaunchLab Mainnet program
-   *
-   * Mainnet remains protected by Kodiak's separate network enable gate.
-   * Once that gate is intentionally enabled, chart/trade verification must
-   * use the production LaunchLab program instead of refusing Mainnet reads.
-   */
-  return KODIAK_LAUNCHPAD_PROGRAM_ID;
+function solFromLamports(lamports: number): number {
+  return lamports / LAMPORTS_PER_SOL;
 }
 
-function redisConfig() {
-  const url =
-    process.env.KV_REST_API_URL ||
-    process.env.UPSTASH_REDIS_REST_URL;
+function splitRevenueLamports(totalLamports: number) {
+  const creatorSuccessFundLamports = Math.floor(
+    (totalLamports * CREATOR_SUCCESS_FUND_BPS) /
+      BPS_DENOMINATOR,
+  );
 
-  const token =
-    process.env.KV_REST_API_TOKEN ||
-    process.env.UPSTASH_REDIS_REST_TOKEN;
-
-  if (!url || !token) {
-    throw new Error(
-      "Redis REST environment variables are missing.",
-    );
-  }
+  const kodiakOperatingLamports =
+    totalLamports - creatorSuccessFundLamports;
 
   return {
-    url: url.replace(/\/$/, ""),
-    token,
+    creatorSuccessFundLamports,
+    creatorSuccessFundSol:
+      solFromLamports(creatorSuccessFundLamports),
+    kodiakOperatingLamports,
+    kodiakOperatingSol:
+      solFromLamports(kodiakOperatingLamports),
   };
 }
 
-async function redis<T = unknown>(
-  command: unknown[],
-): Promise<T> {
-  const { url, token } = redisConfig();
+async function getPlatformId(): Promise<PublicKey> {
+  const redis = getRedis();
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(command),
-    cache: "no-store",
-  });
+  const config =
+    await redis.get<Record<string, unknown>>(
+      CONFIG_KEY,
+    );
 
-  if (!response.ok) {
-    throw new Error(
-      `Redis request failed: ${response.status}`,
+  const configuredPlatformId =
+    typeof config?.platformId === "string"
+      ? config.platformId.trim()
+      : "";
+
+  if (configuredPlatformId) {
+    return new PublicKey(configuredPlatformId);
+  }
+
+  if (KODIAK_IS_DEVNET) {
+    return new PublicKey(
+      process.env.KODIAK_DEVNET_PLATFORM_ID?.trim() ||
+        process.env.NEXT_PUBLIC_KODIAK_DEVNET_PLATFORM_ID?.trim() ||
+        DEVNET_PLATFORM_ID,
     );
   }
 
-  const payload = (await response.json()) as {
-    result?: T;
-    error?: string;
-  };
+  const mainnetPlatformId =
+    process.env.KODIAK_MAINNET_PLATFORM_ID?.trim() ||
+    process.env.NEXT_PUBLIC_KODIAK_MAINNET_PLATFORM_ID?.trim() ||
+    MAINNET_PLATFORM_ID;
 
-  if (payload.error) {
-    throw new Error(payload.error);
-  }
-
-  return payload.result as T;
+  return new PublicKey(mainnetPlatformId);
 }
 
-/*
- * Keep the existing Devnet Redis key format intact so all current trade
- * history and candles remain available after this refactor.
- *
- * Mainnet naturally uses a separate kodiak:mainnet:* namespace.
- */
-const tradeKey = (mint: string) =>
-  `kodiak:${KODIAK_NETWORK}:trades:${mint}`;
-
-const signatureKey = (mint: string) =>
-  `kodiak:${KODIAK_NETWORK}:trade-signatures:${mint}`;
-
-function sleep(ms: number) {
-  return new Promise((resolve) =>
-    setTimeout(resolve, ms),
-  );
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function balanceAmount(value: {
-  uiTokenAmount?: {
-    uiAmountString?: string | null;
-    amount?: string;
-    decimals?: number;
-  };
-}) {
-  const uiAmountString =
-    value.uiTokenAmount?.uiAmountString;
-
-  if (uiAmountString != null) {
-    const parsed = Number(uiAmountString);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-
-  const raw = Number(
-    value.uiTokenAmount?.amount ?? "0",
-  );
-
-  const decimals = Number(
-    value.uiTokenAmount?.decimals ?? 0,
-  );
-
-  if (
-    !Number.isFinite(raw) ||
-    !Number.isFinite(decimals)
-  ) {
-    return 0;
-  }
-
-  return raw / 10 ** decimals;
-}
-
-function collectBalances(
-  rows:
-    | Array<{
-        accountIndex: number;
-        mint: string;
-        owner?: string;
-        uiTokenAmount: {
-          uiAmountString?: string | null;
-          amount: string;
-          decimals: number;
-        };
-      }>
-    | null
-    | undefined,
-): TokenBalance[] {
-  return (rows ?? []).map((row) => ({
-    accountIndex: row.accountIndex,
-    mint: row.mint,
-    owner: row.owner,
-    amount: balanceAmount(row),
-  }));
-}
-
-function deltaForAccount(
-  pre: TokenBalance[],
-  post: TokenBalance[],
-  accountIndex: number,
-  mint: string,
-) {
-  const before =
-    pre.find(
-      (row) =>
-        row.accountIndex === accountIndex &&
-        row.mint === mint,
-    )?.amount ?? 0;
-
-  const after =
-    post.find(
-      (row) =>
-        row.accountIndex === accountIndex &&
-        row.mint === mint,
-    )?.amount ?? 0;
-
-  return {
-    before,
-    after,
-    delta: after - before,
-  };
-}
-
-function findOwnerTokenDelta(
-  pre: TokenBalance[],
-  post: TokenBalance[],
-  mint: string,
-  owner: string,
-) {
-  const indexes = new Set<number>();
-
-  for (const row of [...pre, ...post]) {
-    if (row.mint !== mint) continue;
-    if (row.owner !== owner) continue;
-
-    indexes.add(row.accountIndex);
-  }
-
-  let best:
-    | {
-        accountIndex: number;
-        before: number;
-        after: number;
-        delta: number;
-      }
-    | undefined;
-
-  for (const accountIndex of indexes) {
-    const next = deltaForAccount(
-      pre,
-      post,
-      accountIndex,
-      mint,
-    );
-
-    if (next.delta === 0) continue;
-
-    if (
-      !best ||
-      Math.abs(next.delta) >
-        Math.abs(best.delta)
-    ) {
-      best = {
-        accountIndex,
-        ...next,
-      };
-    }
-  }
-
-  return best;
-}
-
-function findPoolTokenDelta(
-  pre: TokenBalance[],
-  post: TokenBalance[],
-  mint: string,
-  side: "buy" | "sell",
-) {
-  const indexes = new Set<number>();
-
-  for (const row of [...pre, ...post]) {
-    if (row.mint === mint) {
-      indexes.add(row.accountIndex);
-    }
-  }
-
-  let best:
-    | {
-        accountIndex: number;
-        before: number;
-        after: number;
-        delta: number;
-      }
-    | undefined;
-
-  for (const accountIndex of indexes) {
-    const next = deltaForAccount(
-      pre,
-      post,
-      accountIndex,
-      mint,
-    );
-
-    const directionMatches =
-      side === "buy"
-        ? next.delta < 0
-        : next.delta > 0;
-
-    if (!directionMatches) continue;
-
-    if (
-      !best ||
-      Math.abs(next.delta) >
-        Math.abs(best.delta)
-    ) {
-      best = {
-        accountIndex,
-        ...next,
-      };
-    }
-  }
-
-  return best;
-}
-
-async function readLaunchpadCurvePrices(
-  mint: string,
-  minContextSlot: number,
-): Promise<{
-  openPriceSol?: number;
-  closePriceSol?: number;
-}> {
-  const mintA = new PublicKey(mint);
-
-  const poolId = getPdaLaunchpadPoolId(
-    getLaunchpadProgramId(),
-    mintA,
-    NATIVE_MINT,
-  ).publicKey;
-
-  let lastError: unknown;
+async function getTransactionWithRetry(
+  connection: Connection,
+  signature: string,
+): Promise<VersionedTransactionResponse | null> {
+  const attempts = 12;
+  const delayMs = 1250;
 
   for (
-    let attempt = 0;
-    attempt < 6;
+    let attempt = 1;
+    attempt <= attempts;
     attempt += 1
   ) {
-    try {
-      const poolAccount =
-        await connection.getAccountInfo(
-          poolId,
-          {
-            commitment: "confirmed",
-            minContextSlot,
-          },
-        );
+    const transaction =
+      await connection.getTransaction(
+        signature,
+        {
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0,
+        },
+      );
 
-      if (!poolAccount) {
-        throw new Error(
-          "LaunchLab pool account is not available yet.",
-        );
-      }
+    if (transaction) {
+      return transaction;
+    }
 
-      const poolInfo =
-        LaunchpadPool.decode(
-          poolAccount.data,
-        );
-
-      const configAccount =
-        await connection.getAccountInfo(
-          poolInfo.configId,
-          {
-            commitment: "confirmed",
-            minContextSlot,
-          },
-        );
-
-      if (!configAccount) {
-        throw new Error(
-          "LaunchLab config account is not available yet.",
-        );
-      }
-
-      const configInfo =
-        LaunchpadConfig.decode(
-          configAccount.data,
-        );
-
-      const openPriceSol =
-        Curve.getPoolInitPriceByPool({
-          poolInfo,
-          curveType:
-            configInfo.curveType,
-          decimalA:
-            poolInfo.mintDecimalsA,
-          decimalB:
-            poolInfo.mintDecimalsB,
-        }).toNumber();
-
-      const closePriceSol =
-        Curve.getPrice({
-          poolInfo,
-          curveType:
-            configInfo.curveType,
-          decimalA:
-            poolInfo.mintDecimalsA,
-          decimalB:
-            poolInfo.mintDecimalsB,
-        }).toNumber();
-
-      if (
-        !Number.isFinite(openPriceSol) ||
-        !Number.isFinite(closePriceSol) ||
-        openPriceSol <= 0 ||
-        closePriceSol <= 0
-      ) {
-        throw new Error(
-          "LaunchLab returned an invalid bonding-curve spot price.",
-        );
-      }
-
-      return {
-        openPriceSol,
-        closePriceSol,
-      };
-    } catch (error) {
-      lastError = error;
-
-      if (attempt < 5) {
-        await sleep(
-          700 + attempt * 350,
-        );
-      }
+    if (attempt < attempts) {
+      await sleep(delayMs);
     }
   }
 
-  console.error(
-    "Unable to read confirmed LaunchLab curve state:",
-    lastError,
-  );
-
-  return {};
+  return null;
 }
 
-export async function inferTokenAmount(
+async function getParsedTransactionWithRetry(
+  connection: Connection,
   signature: string,
-  mint: string,
-  wallet: string,
-  side: "buy" | "sell" = "buy",
-): Promise<InferredTrade> {
-  /*
-   * Resolve the network-aware LaunchLab program before transaction lookup.
-   * Devnet and Mainnet use their respective Raydium LaunchLab program IDs.
-   */
-  getLaunchpadProgramId();
+): Promise<ParsedTransactionWithMeta | null> {
+  const attempts = 12;
+  const delayMs = 1250;
 
-  const parsed =
-    await connection.getParsedTransaction(
-      signature,
-      {
-        commitment: "confirmed",
-        maxSupportedTransactionVersion: 0,
-      },
-    );
-
-  if (!parsed) {
-    return {
-      tokenAmount: 0,
-      timestamp:
-        Math.floor(Date.now() / 1000),
-    };
-  }
-
-  if (parsed.meta?.err) {
-    return {
-      tokenAmount: 0,
-      timestamp:
-        parsed.blockTime ??
-        Math.floor(Date.now() / 1000),
-      slot: parsed.slot,
-    };
-  }
-
-  const owner =
-    new PublicKey(wallet).toBase58();
-
-  const pre =
-    collectBalances(
-      parsed.meta?.preTokenBalances,
-    );
-
-  const post =
-    collectBalances(
-      parsed.meta?.postTokenBalances,
-    );
-
-  const ownerDelta =
-    findOwnerTokenDelta(
-      pre,
-      post,
-      mint,
-      owner,
-    );
-
-  const ownerDirectionMatches =
-    ownerDelta
-      ? side === "buy"
-        ? ownerDelta.delta > 0
-        : ownerDelta.delta < 0
-      : false;
-
-  const poolDelta =
-    findPoolTokenDelta(
-      pre,
-      post,
-      mint,
-      side,
-    );
-
-  const tokenAmount =
-    Math.abs(
-      ownerDirectionMatches
-        ? ownerDelta?.delta ?? 0
-        : poolDelta?.delta ?? 0,
-    );
-
-  if (
-    !Number.isFinite(tokenAmount) ||
-    tokenAmount <= 0
+  for (
+    let attempt = 1;
+    attempt <= attempts;
+    attempt += 1
   ) {
-    return {
-      tokenAmount: 0,
-      timestamp:
-        parsed.blockTime ??
-        Math.floor(Date.now() / 1000),
-      slot: parsed.slot,
-    };
+    const transaction =
+      await connection.getParsedTransaction(
+        signature,
+        {
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0,
+        },
+      );
+
+    if (transaction) {
+      return transaction;
+    }
+
+    if (attempt < attempts) {
+      await sleep(delayMs);
+    }
   }
 
-  /*
-   * IMPORTANT:
-   * Do not calculate chart prices from ordinary SPL-token vault balances.
-   * LaunchLab pricing uses virtual reserves, so a WSOL/token account ratio
-   * is not the bonding-curve spot price.
-   *
-   * Read Raydium's actual decoded LaunchpadPool instead. minContextSlot
-   * prevents this server from accepting pool state older than the confirmed
-   * trade transaction.
-   */
-  const curvePrices =
-    await readLaunchpadCurvePrices(
-      mint,
-      parsed.slot,
+  return null;
+}
+
+async function buildRevenueSummary() {
+  const redis = getRedis();
+
+  const claimedLamports =
+    Number(
+      (await redis.get<number | string>(
+        CLAIMED_LAMPORTS_KEY,
+      )) ?? 0,
+    );
+
+  const claimCount =
+    Number(
+      (await redis.get<number | string>(
+        CLAIM_COUNT_KEY,
+      )) ?? 0,
+    );
+
+  const lastClaimSignature =
+    (await redis.get<string>(
+      LAST_SIGNATURE_KEY,
+    )) ?? undefined;
+
+  const updatedAt =
+    Number(
+      (await redis.get<number | string>(
+        UPDATED_AT_KEY,
+      )) ?? 0,
+    ) || undefined;
+
+  const creatorSuccessFundTransferredLamports =
+    Number(
+      (await redis.get<number | string>(
+        SUCCESS_FUND_TRANSFERRED_LAMPORTS_KEY,
+      )) ?? 0,
+    );
+
+  const lastCreatorSuccessFundTransferSignature =
+    (await redis.get<string>(
+      SUCCESS_FUND_LAST_TRANSFER_SIGNATURE_KEY,
+    )) ?? undefined;
+
+  const lifetimeSplit =
+    splitRevenueLamports(claimedLamports);
+
+  const pendingCreatorSuccessFundLamports =
+    Math.max(
+      lifetimeSplit.creatorSuccessFundLamports -
+        creatorSuccessFundTransferredLamports,
+      0,
     );
 
   return {
-    tokenAmount,
-    timestamp:
-      parsed.blockTime ??
-      Math.floor(Date.now() / 1000),
-    openPriceSol:
-      curvePrices.openPriceSol,
-    closePriceSol:
-      curvePrices.closePriceSol,
-    slot: parsed.slot,
+    network: KODIAK_NETWORK,
+
+    claimedLamports,
+    claimedSol:
+      solFromLamports(claimedLamports),
+
+    creatorSuccessFundPercent: 5,
+    creatorSuccessFundLamports:
+      lifetimeSplit.creatorSuccessFundLamports,
+    creatorSuccessFundSol:
+      lifetimeSplit.creatorSuccessFundSol,
+
+    creatorSuccessFundTransferredLamports,
+    creatorSuccessFundTransferredSol:
+      solFromLamports(
+        creatorSuccessFundTransferredLamports,
+      ),
+
+    pendingCreatorSuccessFundLamports,
+    pendingCreatorSuccessFundSol:
+      solFromLamports(
+        pendingCreatorSuccessFundLamports,
+      ),
+
+    creatorSuccessFundWallet:
+      CREATOR_SUCCESS_FUND_WALLET,
+    lastCreatorSuccessFundTransferSignature,
+
+    kodiakOperatingPercent: 95,
+    kodiakOperatingLamports:
+      lifetimeSplit.kodiakOperatingLamports,
+    kodiakOperatingSol:
+      lifetimeSplit.kodiakOperatingSol,
+
+    claimCount,
+    lastClaimSignature,
+    updatedAt,
   };
 }
 
-export async function saveTrade(
-  trade: StoredTrade,
-) {
-  const added = await redis<number>([
-    "SADD",
-    signatureKey(trade.mint),
-    trade.signature,
-  ]);
-
-  if (added === 0) {
-    const existing =
-      await getTrades(
-        trade.mint,
-      );
-
-    return (
-      existing.find(
-        (row) =>
-          row.signature ===
-          trade.signature,
-      ) ?? trade
+export async function GET() {
+  try {
+    return NextResponse.json(
+      await buildRevenueSummary(),
+    );
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to load Kodiak revenue accounting.",
+      },
+      { status: 503 },
     );
   }
-
-  const key = tradeKey(
-    trade.mint,
-  );
-
-  await redis([
-    "RPUSH",
-    key,
-    JSON.stringify(trade),
-  ]);
-
-  await redis([
-    "LTRIM",
-    key,
-    -5000,
-    -1,
-  ]);
-
-  return trade;
 }
 
-export async function getTrades(
-  mint: string,
-): Promise<StoredTrade[]> {
-  const rows =
-    await redis<string[]>([
-      "LRANGE",
-      tradeKey(mint),
-      0,
-      -1,
-    ]);
-
-  if (!Array.isArray(rows)) {
-    return [];
-  }
-
-  return rows
-    .map((row) => {
-      try {
-        return JSON.parse(
-          row,
-        ) as StoredTrade;
-      } catch {
-        return null;
-      }
-    })
-    .filter(
-      (
-        row,
-      ): row is StoredTrade =>
-        Boolean(row),
-    )
-    .sort(
-      (a, b) =>
-        a.timestamp -
-        b.timestamp,
-    );
-}
-
-export function buildCandles(
-  trades: StoredTrade[],
-  intervalSeconds: number,
+export async function POST(
+  request: NextRequest,
 ) {
-  const buckets = new Map<
-    number,
-    {
-      time: number;
-      open: number;
-      high: number;
-      low: number;
-      close: number;
-      volume: number;
-    }
-  >();
+  const redis = getRedis();
 
-  let previousClose = 0;
+  let signature = "";
 
-  for (const trade of trades) {
-    const storedOpen = Number(
-      trade.openPriceSol,
-    );
+  try {
+    const body = (await request.json()) as {
+      signature?: string;
+    };
 
-    const storedClose = Number(
-      trade.closePriceSol,
-    );
+    signature =
+      typeof body.signature === "string"
+        ? body.signature.trim()
+        : "";
 
-    if (
-      !Number.isFinite(
-        storedClose,
-      ) ||
-      storedClose <= 0
-    ) {
-      continue;
-    }
-
-    const eventOpen =
-      Number.isFinite(
-        previousClose,
-      ) &&
-      previousClose > 0
-        ? previousClose
-        : Number.isFinite(
-              storedOpen,
-            ) &&
-            storedOpen > 0
-          ? storedOpen
-          : 0;
-
-    if (
-      !Number.isFinite(
-        eventOpen,
-      ) ||
-      eventOpen <= 0
-    ) {
-      continue;
-    }
-
-    /*
-     * A LaunchLab bonding-curve buy must move spot price upward.
-     * A sell must move it downward.
-     *
-     * If an old/stale stored record violates that invariant, do not turn it
-     * into a fake candle. New trades are rejected by the POST route before
-     * they can be saved in this state.
-     */
-    const directionIsValid =
-      trade.side === "buy"
-        ? storedClose >
-          eventOpen
-        : storedClose <
-          eventOpen;
-
-    if (
-      !directionIsValid
-    ) {
-      continue;
-    }
-
-    const time =
-      Math.floor(
-        trade.timestamp /
-          intervalSeconds,
-      ) *
-      intervalSeconds;
-
-    const eventHigh =
-      Math.max(
-        eventOpen,
-        storedClose,
-      );
-
-    const eventLow =
-      Math.min(
-        eventOpen,
-        storedClose,
-      );
-
-    const current =
-      buckets.get(time);
-
-    if (!current) {
-      buckets.set(
-        time,
+    if (signature.length < 40) {
+      return NextResponse.json(
         {
-          time,
-          open:
-            eventOpen,
-          high:
-            eventHigh,
-          low:
-            eventLow,
-          close:
-            storedClose,
-          volume:
-            Math.abs(
-              Number(
-                trade.solAmount ||
-                  0,
-              ),
-            ),
+          error:
+            "A valid Solana transaction signature is required.",
         },
+        { status: 400 },
       );
-    } else {
-      current.high =
-        Math.max(
-          current.high,
-          eventHigh,
+    }
+
+    const dedupeKey =
+      `${CLAIM_SIGNATURE_PREFIX}${signature}`;
+
+    const existing =
+      await redis.get<string>(dedupeKey);
+
+    if (existing) {
+      return NextResponse.json(
+        {
+          error:
+            "This platform claim has already been recorded.",
+        },
+        { status: 409 },
+      );
+    }
+
+    const lock = await redis.set(
+      dedupeKey,
+      "processing",
+      { nx: true },
+    );
+
+    if (!lock) {
+      return NextResponse.json(
+        {
+          error:
+            "This platform claim is already being processed.",
+        },
+        { status: 409 },
+      );
+    }
+
+    try {
+      const connection =
+        createVerificationConnection();
+
+      const transaction =
+        await getTransactionWithRetry(
+          connection,
+          signature,
         );
 
-      current.low =
-        Math.min(
-          current.low,
-          eventLow,
+      if (!transaction) {
+        throw new Error(
+          `The ${networkLabel()} transaction is confirmed by the wallet but has not reached Kodiak's verification RPC yet. Please wait a moment and try again.`,
+        );
+      }
+
+      if (
+        !transaction.meta ||
+        transaction.meta.err
+      ) {
+        throw new Error(
+          `The transaction was not a successful ${networkLabel()} transaction.`,
+        );
+      }
+
+      const message =
+        transaction.transaction.message;
+
+      const requiredSignatures =
+        message.header.numRequiredSignatures;
+
+      const signerKeys =
+        message.staticAccountKeys.slice(
+          0,
+          requiredSignatures,
         );
 
-      current.close =
-        storedClose;
-
-      current.volume +=
-        Math.abs(
-          Number(
-            trade.solAmount ||
-              0,
+      const authorizedSigner =
+        signerKeys.find((key) =>
+          isKodiakAdminWallet(
+            key.toBase58(),
           ),
         );
+
+      if (!authorizedSigner) {
+        return NextResponse.json(
+          {
+            error:
+              "The transaction was not signed by an authorized Kodiak admin wallet.",
+          },
+          { status: 403 },
+        );
+      }
+
+      const platformId =
+        await getPlatformId();
+
+      const platformVault =
+        getPdaPlatformVault(
+          KODIAK_LAUNCHPAD_PROGRAM_ID,
+          platformId,
+          NATIVE_MINT,
+        ).publicKey;
+
+      const accountKeys =
+        message.getAccountKeys({
+          accountKeysFromLookups:
+            transaction.meta
+              .loadedAddresses ?? undefined,
+        });
+
+      let platformVaultIndex = -1;
+
+      for (
+        let index = 0;
+        index < accountKeys.length;
+        index += 1
+      ) {
+        const key = accountKeys.get(index);
+
+        if (
+          key &&
+          key.equals(platformVault)
+        ) {
+          platformVaultIndex = index;
+          break;
+        }
+      }
+
+      if (platformVaultIndex < 0) {
+        throw new Error(
+          "The transaction does not contain Kodiak's Raydium platform-fee vault.",
+        );
+      }
+
+      const mint =
+        NATIVE_MINT.toBase58();
+
+      const pre =
+        transaction.meta.preTokenBalances?.find(
+          (balance) =>
+            balance.accountIndex ===
+              platformVaultIndex &&
+            balance.mint === mint,
+        );
+
+      const post =
+        transaction.meta.postTokenBalances?.find(
+          (balance) =>
+            balance.accountIndex ===
+              platformVaultIndex &&
+            balance.mint === mint,
+        );
+
+      const preAmount =
+        BigInt(
+          pre?.uiTokenAmount.amount ?? "0",
+        );
+
+      const postAmount =
+        BigInt(
+          post?.uiTokenAmount.amount ?? "0",
+        );
+
+      const claimed =
+        preAmount - postAmount;
+
+      if (claimed <= BigInt(0)) {
+        throw new Error(
+          "No positive Kodiak platform-fee withdrawal was found in this transaction.",
+        );
+      }
+
+      const claimedLamports =
+        Number(claimed);
+
+      if (
+        !Number.isSafeInteger(
+          claimedLamports,
+        )
+      ) {
+        throw new Error(
+          "Claim amount is too large to record safely.",
+        );
+      }
+
+      const totalClaimedLamports =
+        await redis.incrby(
+          CLAIMED_LAMPORTS_KEY,
+          claimedLamports,
+        );
+
+      const claimCount =
+        await redis.incr(
+          CLAIM_COUNT_KEY,
+        );
+
+      const updatedAt =
+        Math.floor(Date.now() / 1000);
+
+      await redis.set(
+        LAST_SIGNATURE_KEY,
+        signature,
+      );
+
+      await redis.set(
+        UPDATED_AT_KEY,
+        updatedAt,
+      );
+
+      await redis.set(
+        dedupeKey,
+        "recorded",
+      );
+
+      const claimSplit =
+        splitRevenueLamports(claimedLamports);
+
+      const lifetimeSplit =
+        splitRevenueLamports(
+          Number(totalClaimedLamports),
+        );
+
+      const transferredLamports =
+        Number(
+          (await redis.get<number | string>(
+            SUCCESS_FUND_TRANSFERRED_LAMPORTS_KEY,
+          )) ?? 0,
+        );
+
+      const pendingCreatorSuccessFundLamports =
+        Math.max(
+          lifetimeSplit.creatorSuccessFundLamports -
+            transferredLamports,
+          0,
+        );
+
+      return NextResponse.json({
+        recorded: true,
+        network: KODIAK_NETWORK,
+        signature,
+
+        claimedLamports,
+        claimedSol:
+          solFromLamports(
+            claimedLamports,
+          ),
+
+        creatorSuccessFundPercent: 5,
+        claimCreatorSuccessFundLamports:
+          claimSplit.creatorSuccessFundLamports,
+        claimCreatorSuccessFundSol:
+          claimSplit.creatorSuccessFundSol,
+        claimKodiakOperatingLamports:
+          claimSplit.kodiakOperatingLamports,
+        claimKodiakOperatingSol:
+          claimSplit.kodiakOperatingSol,
+
+        totalClaimedLamports:
+          Number(
+            totalClaimedLamports,
+          ),
+        totalClaimedSol:
+          solFromLamports(
+            Number(
+              totalClaimedLamports,
+            ),
+          ),
+
+        totalCreatorSuccessFundLamports:
+          lifetimeSplit.creatorSuccessFundLamports,
+        totalCreatorSuccessFundSol:
+          lifetimeSplit.creatorSuccessFundSol,
+
+        creatorSuccessFundTransferredLamports:
+          transferredLamports,
+        creatorSuccessFundTransferredSol:
+          solFromLamports(
+            transferredLamports,
+          ),
+
+        pendingCreatorSuccessFundLamports,
+        pendingCreatorSuccessFundSol:
+          solFromLamports(
+            pendingCreatorSuccessFundLamports,
+          ),
+
+        totalKodiakOperatingLamports:
+          lifetimeSplit.kodiakOperatingLamports,
+        totalKodiakOperatingSol:
+          lifetimeSplit.kodiakOperatingSol,
+
+        claimCount:
+          Number(claimCount),
+        updatedAt,
+      });
+    } catch (error) {
+      await redis.del(
+        `${CLAIM_SIGNATURE_PREFIX}${signature}`,
+      );
+
+      throw error;
+    }
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to verify and record Kodiak platform revenue.",
+      },
+      { status: 500 },
+    );
+  }
+}
+
+export async function PATCH(
+  request: NextRequest,
+) {
+  const redis = getRedis();
+
+  try {
+    const body = (await request.json()) as {
+      signature?: string;
+    };
+
+    const signature =
+      typeof body.signature === "string"
+        ? body.signature.trim()
+        : "";
+
+    if (signature.length < 40) {
+      return NextResponse.json(
+        {
+          error:
+            "A valid Success Fund transfer signature is required.",
+        },
+        { status: 400 },
+      );
     }
 
-    previousClose =
-      storedClose;
-  }
+    const dedupeKey =
+      `${SUCCESS_FUND_TRANSFER_SIGNATURE_PREFIX}${signature}`;
 
-  return [
-    ...buckets.values(),
-  ].sort(
-    (a, b) =>
-      a.time - b.time,
-  );
+    const existing =
+      await redis.get<string>(dedupeKey);
+
+    if (existing === "recorded") {
+      return NextResponse.json({
+        recorded: true,
+        ...(await buildRevenueSummary()),
+      });
+    }
+
+    const lock = await redis.set(
+      dedupeKey,
+      "processing",
+      { nx: true },
+    );
+
+    if (!lock && !existing) {
+      return NextResponse.json(
+        {
+          error:
+            "This Success Fund transfer is already being processed.",
+        },
+        { status: 409 },
+      );
+    }
+
+    try {
+      const connection =
+        createVerificationConnection();
+
+      const transaction =
+        await getParsedTransactionWithRetry(
+          connection,
+          signature,
+        );
+
+      if (!transaction) {
+        throw new Error(
+          `The Success Fund transfer has not reached Kodiak's ${networkLabel()} verification RPC yet. Please wait a moment and try again.`,
+        );
+      }
+
+      if (
+        !transaction.meta ||
+        transaction.meta.err
+      ) {
+        throw new Error(
+          `The Success Fund transfer was not a successful ${networkLabel()} transaction.`,
+        );
+      }
+
+      const authorizedSigner =
+        transaction.transaction.message.accountKeys.find(
+          (account) =>
+            account.signer &&
+            isKodiakAdminWallet(
+              account.pubkey.toBase58(),
+            ),
+        );
+
+      if (!authorizedSigner) {
+        return NextResponse.json(
+          {
+            error:
+              "The Success Fund transfer was not signed by an authorized Kodiak admin wallet.",
+          },
+          { status: 403 },
+        );
+      }
+
+      let transferredLamports = 0;
+
+      for (
+        const instruction of
+        transaction.transaction.message.instructions
+      ) {
+        if (
+          "parsed" in instruction &&
+          instruction.program === "system"
+        ) {
+          const parsed =
+            instruction.parsed as {
+              type?: string;
+              info?: {
+                source?: string;
+                destination?: string;
+                lamports?: number;
+              };
+            };
+
+          if (
+            parsed.type === "transfer" &&
+            parsed.info?.source ===
+              authorizedSigner.pubkey.toBase58() &&
+            parsed.info?.destination ===
+              CREATOR_SUCCESS_FUND_WALLET &&
+            typeof parsed.info?.lamports === "number" &&
+            parsed.info.lamports > 0
+          ) {
+            transferredLamports +=
+              parsed.info.lamports;
+          }
+        }
+      }
+
+      if (transferredLamports <= 0) {
+        throw new Error(
+          "No SOL transfer to Kodiak's Creator Success Fund wallet was found in this transaction.",
+        );
+      }
+
+      const summaryBefore =
+        await buildRevenueSummary();
+
+      if (
+        transferredLamports >
+        summaryBefore.pendingCreatorSuccessFundLamports
+      ) {
+        throw new Error(
+          "The transfer amount is larger than Kodiak's pending Creator Success Fund balance.",
+        );
+      }
+
+      const totalTransferredLamports =
+        await redis.incrby(
+          SUCCESS_FUND_TRANSFERRED_LAMPORTS_KEY,
+          transferredLamports,
+        );
+
+      await redis.set(
+        SUCCESS_FUND_LAST_TRANSFER_SIGNATURE_KEY,
+        signature,
+      );
+
+      await redis.set(
+        dedupeKey,
+        "recorded",
+      );
+
+      const updatedAt =
+        Math.floor(Date.now() / 1000);
+
+      await redis.set(
+        UPDATED_AT_KEY,
+        updatedAt,
+      );
+
+      return NextResponse.json({
+        recorded: true,
+        transferSignature: signature,
+        transferredLamports,
+        transferredSol:
+          solFromLamports(
+            transferredLamports,
+          ),
+        totalTransferredLamports:
+          Number(totalTransferredLamports),
+        totalTransferredSol:
+          solFromLamports(
+            Number(totalTransferredLamports),
+          ),
+        ...(await buildRevenueSummary()),
+      });
+    } catch (error) {
+      await redis.del(dedupeKey);
+      throw error;
+    }
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to verify and record the Creator Success Fund transfer.",
+      },
+      { status: 500 },
+    );
+  }
 }

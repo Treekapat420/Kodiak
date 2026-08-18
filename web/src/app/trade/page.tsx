@@ -31,6 +31,12 @@ type SavedLaunch = {
   symbol?: string;
 };
 
+type KodiakConfigResponse = {
+  platformId?: string;
+  network?: string;
+  error?: string;
+};
+
 type GraduationState = {
   network: string;
   mint: string;
@@ -159,6 +165,59 @@ function rawAmountToDecimalString(
   return fraction
     ? `${whole}.${fraction}`
     : whole;
+}
+
+async function getKodiakPlatformId(): Promise<PublicKey> {
+  const response =
+    await fetch(
+      "/api/config",
+      {
+        cache:
+          "no-store",
+      },
+    );
+
+  const payload =
+    (await response.json()) as KodiakConfigResponse;
+
+  if (
+    !response.ok ||
+    !payload.platformId
+  ) {
+    throw new Error(
+      payload.error ||
+        `Kodiak's ${NETWORK_LABEL} PlatformConfig is unavailable.`,
+    );
+  }
+
+  if (
+    payload.network &&
+    payload.network !==
+      KODIAK_NETWORK
+  ) {
+    throw new Error(
+      `Kodiak config returned ${payload.network}, but the trading client is running on ${KODIAK_NETWORK}.`,
+    );
+  }
+
+  return new PublicKey(
+    payload.platformId,
+  );
+}
+
+function assertKodiakLaunchpadPool(
+  poolPlatformId: PublicKey,
+  kodiakPlatformId: PublicKey,
+) {
+  if (
+    !poolPlatformId.equals(
+      kodiakPlatformId,
+    )
+  ) {
+    throw new Error(
+      "This LaunchLab token does not belong to Kodiak's active PlatformConfig. Kodiak will not prepare a trade for another LaunchLab platform.",
+    );
+  }
 }
 
 export default function TradePage() {
@@ -342,6 +401,15 @@ export default function TradePage() {
       const state =
         data as GraduationState;
 
+      if (
+        state.network !==
+        KODIAK_NETWORK
+      ) {
+        throw new Error(
+          `Graduation API returned ${state.network}, but Kodiak is running on ${KODIAK_NETWORK}.`,
+        );
+      }
+
       setGraduationState(state);
 
       if (state.launchpadPoolId) {
@@ -389,6 +457,13 @@ export default function TradePage() {
 
         const state =
           (await response.json()) as GraduationState;
+
+        if (
+          state.network !==
+          KODIAK_NETWORK
+        ) {
+          return;
+        }
 
         if (!cancelled) {
           setGraduationState(
@@ -696,12 +771,6 @@ export default function TradePage() {
 
     setEstimatedTokens(null);
 
-    setStatus({
-      kind: "working",
-      message:
-        "Loading the graduated Raydium CPMM pool and calculating the purchase...",
-    });
-
     const mintA =
       new PublicKey(
         normalizedMint,
@@ -716,114 +785,129 @@ export default function TradePage() {
         signAllTransactions,
       });
 
-    const {
-      poolInfo,
-      poolKeys,
-      rpcData,
-    } =
-      await raydium.cpmm.getPoolInfoFromRpc(
-        graduation.cpmmPoolId,
-      );
-
-    const inputMint =
-      NATIVE_MINT.toBase58();
-
-    if (
-      inputMint !==
-        poolInfo.mintA.address &&
-      inputMint !==
-        poolInfo.mintB.address
-    ) {
-      throw new Error(
-        "The graduated CPMM pool does not contain wrapped SOL.",
-      );
-    }
-
-    const outputMint =
-      inputMint ===
-      poolInfo.mintA.address
-        ? poolInfo.mintB.address
-        : poolInfo.mintA.address;
-
-    if (
-      outputMint !==
-      mintA.toBase58()
-    ) {
-      throw new Error(
-        "The graduated CPMM pool does not match this Kodiak token.",
-      );
-    }
-
-    const baseIn =
-      inputMint ===
-      poolInfo.mintA.address;
-
     const inputAmount =
       new BN(
         lamports,
       );
 
-    const configInfo =
-      rpcData.configInfo;
+    const buildCpmmBuy =
+      async () => {
+        const {
+          poolInfo,
+          poolKeys,
+          rpcData,
+        } =
+          await raydium.cpmm.getPoolInfoFromRpc(
+            graduation.cpmmPoolId!,
+          );
 
-    if (!configInfo) {
-      throw new Error(
-        "Raydium CPMM fee configuration is unavailable.",
-      );
-    }
+        const inputMint =
+          NATIVE_MINT.toBase58();
 
-    const swapResult =
-      CurveCalculator.swapBaseInput(
-        inputAmount,
-        baseIn
-          ? rpcData.baseReserve
-          : rpcData.quoteReserve,
-        baseIn
-          ? rpcData.quoteReserve
-          : rpcData.baseReserve,
-        configInfo.tradeFeeRate,
-        configInfo.creatorFeeRate,
-        configInfo.protocolFeeRate,
-        configInfo.fundFeeRate,
-        rpcData.feeOn ===
-            FeeOn.BothToken ||
-          rpcData.feeOn ===
-            FeeOn.OnlyTokenB,
-      );
+        if (
+          inputMint !==
+            poolInfo.mintA.address &&
+          inputMint !==
+            poolInfo.mintB.address
+        ) {
+          throw new Error(
+            "The graduated CPMM pool does not contain wrapped SOL.",
+          );
+        }
 
-    const outputDecimals =
-      baseIn
-        ? poolInfo.mintB.decimals
-        : poolInfo.mintA.decimals;
+        const outputMint =
+          inputMint ===
+          poolInfo.mintA.address
+            ? poolInfo.mintB.address
+            : poolInfo.mintA.address;
+
+        if (
+          outputMint !==
+          mintA.toBase58()
+        ) {
+          throw new Error(
+            "The graduated CPMM pool does not match this Kodiak token.",
+          );
+        }
+
+        const baseIn =
+          inputMint ===
+          poolInfo.mintA.address;
+
+        const configInfo =
+          rpcData.configInfo;
+
+        if (!configInfo) {
+          throw new Error(
+            "Raydium CPMM fee configuration is unavailable.",
+          );
+        }
+
+        const swapResult =
+          CurveCalculator.swapBaseInput(
+            inputAmount,
+            baseIn
+              ? rpcData.baseReserve
+              : rpcData.quoteReserve,
+            baseIn
+              ? rpcData.quoteReserve
+              : rpcData.baseReserve,
+            configInfo.tradeFeeRate,
+            configInfo.creatorFeeRate,
+            configInfo.protocolFeeRate,
+            configInfo.fundFeeRate,
+            rpcData.feeOn ===
+                FeeOn.BothToken ||
+              rpcData.feeOn ===
+                FeeOn.OnlyTokenB,
+          );
+
+        const outputDecimals =
+          baseIn
+            ? poolInfo.mintB.decimals
+            : poolInfo.mintA.decimals;
+
+        const built =
+          await raydium.cpmm.swap({
+            poolInfo,
+            poolKeys,
+            inputAmount,
+            swapResult,
+            slippage:
+              0.01,
+            baseIn,
+            txVersion:
+              TxVersion.V0,
+            config: {
+              associatedOnly:
+                false,
+              checkCreateATAOwner:
+                true,
+            },
+          });
+
+        return {
+          ...built,
+          estimatedOutput:
+            rawAmountToDecimalString(
+              swapResult.outputAmount,
+              outputDecimals,
+            ),
+        };
+      };
+
+    setStatus({
+      kind: "working",
+      message:
+        "Loading the graduated Raydium CPMM pool and calculating the purchase...",
+    });
+
+    const simulationBuild =
+      await buildCpmmBuy();
 
     setEstimatedTokens(
-      rawAmountToDecimalString(
-        swapResult.outputAmount,
-        outputDecimals,
-      ),
+      simulationBuild.estimatedOutput,
     );
-
-    const {
-      transaction,
-      execute,
-    } =
-      await raydium.cpmm.swap({
-        poolInfo,
-        poolKeys,
-        inputAmount,
-        swapResult,
-        slippage:
-          0.01,
-        baseIn,
-        txVersion:
-          TxVersion.V0,
-        config: {
-          associatedOnly:
-            false,
-          checkCreateATAOwner:
-            true,
-        },
-      });
 
     setStatus({
       kind: "working",
@@ -832,10 +916,10 @@ export default function TradePage() {
     });
 
     const simulation =
-      transaction instanceof
+      simulationBuild.transaction instanceof
       VersionedTransaction
         ? await connection.simulateTransaction(
-            transaction,
+            simulationBuild.transaction,
             {
               commitment:
                 "confirmed",
@@ -846,7 +930,7 @@ export default function TradePage() {
             },
           )
         : await connection.simulateTransaction(
-            transaction,
+            simulationBuild.transaction,
           );
 
     if (
@@ -869,11 +953,45 @@ export default function TradePage() {
     setStatus({
       kind: "working",
       message:
-        `Simulation passed. Approve the ${NETWORK_LABEL} CPMM buy in your wallet...`,
+        "Simulation passed. Refreshing CPMM reserves and rebuilding the buy before wallet approval...",
+    });
+
+    const liveGraduation =
+      await loadGraduationState(
+        normalizedMint,
+        {
+          silent:
+            true,
+        },
+      );
+
+    if (
+      !liveGraduation ||
+      !liveGraduation.trading.graduated ||
+      !liveGraduation.trading.cpmmReady ||
+      liveGraduation.cpmmPoolId !==
+        graduation.cpmmPoolId
+    ) {
+      throw new Error(
+        "The token's graduation/CPMM state changed after simulation. No wallet request was opened; refresh and try again.",
+      );
+    }
+
+    const freshBuild =
+      await buildCpmmBuy();
+
+    setEstimatedTokens(
+      freshBuild.estimatedOutput,
+    );
+
+    setStatus({
+      kind: "working",
+      message:
+        `Fresh CPMM quote built after simulation. Approve the ${NETWORK_LABEL} buy in your wallet...`,
     });
 
     const result =
-      await execute({
+      await freshBuild.execute({
         sendAndConfirm:
           true,
       });
@@ -950,12 +1068,6 @@ export default function TradePage() {
       null,
     );
 
-    setStatus({
-      kind: "working",
-      message:
-        "Loading the graduated Raydium CPMM pool and calculating the sale...",
-    });
-
     const mintA =
       new PublicKey(
         normalizedMint,
@@ -970,118 +1082,132 @@ export default function TradePage() {
         signAllTransactions,
       });
 
-    const {
-      poolInfo,
-      poolKeys,
-      rpcData,
-    } =
-      await raydium.cpmm.getPoolInfoFromRpc(
-        graduation.cpmmPoolId,
-      );
+    const buildCpmmSell =
+      async () => {
+        const {
+          poolInfo,
+          poolKeys,
+          rpcData,
+        } =
+          await raydium.cpmm.getPoolInfoFromRpc(
+            graduation.cpmmPoolId!,
+          );
 
-    const inputMint =
-      mintA.toBase58();
+        const inputMint =
+          mintA.toBase58();
 
-    if (
-      inputMint !==
-        poolInfo.mintA.address &&
-      inputMint !==
-        poolInfo.mintB.address
-    ) {
-      throw new Error(
-        "The graduated CPMM pool does not match this Kodiak token.",
-      );
-    }
+        if (
+          inputMint !==
+            poolInfo.mintA.address &&
+          inputMint !==
+            poolInfo.mintB.address
+        ) {
+          throw new Error(
+            "The graduated CPMM pool does not match this Kodiak token.",
+          );
+        }
 
-    const outputMint =
-      inputMint ===
-      poolInfo.mintA.address
-        ? poolInfo.mintB.address
-        : poolInfo.mintA.address;
+        const outputMint =
+          inputMint ===
+          poolInfo.mintA.address
+            ? poolInfo.mintB.address
+            : poolInfo.mintA.address;
 
-    if (
-      outputMint !==
-      NATIVE_MINT.toBase58()
-    ) {
-      throw new Error(
-        "The graduated CPMM pool does not contain wrapped SOL.",
-      );
-    }
+        if (
+          outputMint !==
+          NATIVE_MINT.toBase58()
+        ) {
+          throw new Error(
+            "The graduated CPMM pool does not contain wrapped SOL.",
+          );
+        }
 
-    const baseIn =
-      inputMint ===
-      poolInfo.mintA.address;
+        const baseIn =
+          inputMint ===
+          poolInfo.mintA.address;
 
-    const configInfo =
-      rpcData.configInfo;
+        const configInfo =
+          rpcData.configInfo;
 
-    if (!configInfo) {
-      throw new Error(
-        "Raydium CPMM fee configuration is unavailable.",
-      );
-    }
+        if (!configInfo) {
+          throw new Error(
+            "Raydium CPMM fee configuration is unavailable.",
+          );
+        }
 
-    const swapResult =
-      CurveCalculator.swapBaseInput(
-        rawSellAmount,
-        baseIn
-          ? rpcData.baseReserve
-          : rpcData.quoteReserve,
-        baseIn
-          ? rpcData.quoteReserve
-          : rpcData.baseReserve,
-        configInfo.tradeFeeRate,
-        configInfo.creatorFeeRate,
-        configInfo.protocolFeeRate,
-        configInfo.fundFeeRate,
-        rpcData.feeOn ===
-            FeeOn.BothToken ||
-          rpcData.feeOn ===
-            FeeOn.OnlyTokenB,
-      );
+        const swapResult =
+          CurveCalculator.swapBaseInput(
+            rawSellAmount,
+            baseIn
+              ? rpcData.baseReserve
+              : rpcData.quoteReserve,
+            baseIn
+              ? rpcData.quoteReserve
+              : rpcData.baseReserve,
+            configInfo.tradeFeeRate,
+            configInfo.creatorFeeRate,
+            configInfo.protocolFeeRate,
+            configInfo.fundFeeRate,
+            rpcData.feeOn ===
+                FeeOn.BothToken ||
+              rpcData.feeOn ===
+                FeeOn.OnlyTokenB,
+          );
 
-    const estimatedLamports =
-      Number(
-        swapResult.outputAmount.toString(),
-      );
+        const estimatedLamports =
+          Number(
+            swapResult.outputAmount.toString(),
+          );
+
+        const built =
+          await raydium.cpmm.swap({
+            poolInfo,
+            poolKeys,
+            inputAmount:
+              rawSellAmount,
+            swapResult,
+            slippage:
+              0.01,
+            baseIn,
+            txVersion:
+              TxVersion.V0,
+            config: {
+              associatedOnly:
+                false,
+              checkCreateATAOwner:
+                true,
+            },
+          });
+
+        return {
+          ...built,
+          estimatedLamports,
+        };
+      };
+
+    setStatus({
+      kind: "working",
+      message:
+        "Loading the graduated Raydium CPMM pool and calculating the sale...",
+    });
+
+    const simulationBuild =
+      await buildCpmmSell();
 
     if (
       Number.isFinite(
-        estimatedLamports,
+        simulationBuild.estimatedLamports,
       )
     ) {
       setEstimatedSellSol(
         (
-          estimatedLamports /
+          simulationBuild.estimatedLamports /
           LAMPORTS_PER_SOL
         ).toFixed(
           9,
         ),
       );
     }
-
-    const {
-      transaction,
-      execute,
-    } =
-      await raydium.cpmm.swap({
-        poolInfo,
-        poolKeys,
-        inputAmount:
-          rawSellAmount,
-        swapResult,
-        slippage:
-          0.01,
-        baseIn,
-        txVersion:
-          TxVersion.V0,
-        config: {
-          associatedOnly:
-            false,
-          checkCreateATAOwner:
-            true,
-        },
-      });
 
     setStatus({
       kind: "working",
@@ -1090,10 +1216,10 @@ export default function TradePage() {
     });
 
     const simulation =
-      transaction instanceof
+      simulationBuild.transaction instanceof
       VersionedTransaction
         ? await connection.simulateTransaction(
-            transaction,
+            simulationBuild.transaction,
             {
               commitment:
                 "confirmed",
@@ -1104,7 +1230,7 @@ export default function TradePage() {
             },
           )
         : await connection.simulateTransaction(
-            transaction,
+            simulationBuild.transaction,
           );
 
     if (
@@ -1127,11 +1253,56 @@ export default function TradePage() {
     setStatus({
       kind: "working",
       message:
-        `Simulation passed. Approve the ${NETWORK_LABEL} CPMM sell in your wallet...`,
+        "Simulation passed. Refreshing CPMM reserves and rebuilding the sell before wallet approval...",
+    });
+
+    const liveGraduation =
+      await loadGraduationState(
+        normalizedMint,
+        {
+          silent:
+            true,
+        },
+      );
+
+    if (
+      !liveGraduation ||
+      !liveGraduation.trading.graduated ||
+      !liveGraduation.trading.cpmmReady ||
+      liveGraduation.cpmmPoolId !==
+        graduation.cpmmPoolId
+    ) {
+      throw new Error(
+        "The token's graduation/CPMM state changed after simulation. No wallet request was opened; refresh and try again.",
+      );
+    }
+
+    const freshBuild =
+      await buildCpmmSell();
+
+    if (
+      Number.isFinite(
+        freshBuild.estimatedLamports,
+      )
+    ) {
+      setEstimatedSellSol(
+        (
+          freshBuild.estimatedLamports /
+          LAMPORTS_PER_SOL
+        ).toFixed(
+          9,
+        ),
+      );
+    }
+
+    setStatus({
+      kind: "working",
+      message:
+        `Fresh CPMM quote built after simulation. Approve the ${NETWORK_LABEL} sell in your wallet...`,
     });
 
     const result =
-      await execute({
+      await freshBuild.execute({
         sendAndConfirm:
           true,
       });
@@ -1155,9 +1326,9 @@ export default function TradePage() {
 
     const solAmount =
       Number.isFinite(
-        estimatedLamports,
+        freshBuild.estimatedLamports,
       )
-        ? estimatedLamports /
+        ? freshBuild.estimatedLamports /
           LAMPORTS_PER_SOL
         : undefined;
 
@@ -1361,52 +1532,76 @@ export default function TradePage() {
         signAllTransactions,
       });
 
-      const poolInfo =
-        await raydium.launchpad.getRpcPoolInfo({
-          poolId,
-        });
-
-      const platformAccount =
-        await connection.getAccountInfo(
-          poolInfo.platformId,
-          "confirmed",
-        );
-
-      if (!platformAccount) {
-        throw new Error(
-          `The LaunchLab PlatformConfig account was not found on ${NETWORK_LABEL}.`,
-        );
-      }
-
-      const platformInfo = PlatformConfig.decode(
-        platformAccount.data,
-      );
+      const kodiakPlatformId =
+        await getKodiakPlatformId();
 
       const mintInfo =
-        await raydium.token.getTokenInfo(mintA);
+        await raydium.token.getTokenInfo(
+          mintA,
+        );
 
-      const {
-        transaction,
-        extInfo,
-        execute,
-      } = await raydium.launchpad.buyToken({
-        programId: KODIAK_LAUNCHPAD_PROGRAM_ID,
-        mintA,
-        mintAProgram: new PublicKey(
-          mintInfo.programId,
-        ),
-        poolInfo,
-        slippage: TRADE_SLIPPAGE,
-        configInfo: poolInfo.configInfo,
-        platformFeeRate: platformInfo.feeRate,
-        txVersion: TxVersion.V0,
-        buyAmount: new BN(lamports),
-      });
+      const buildBondingBuy =
+        async () => {
+          const poolInfo =
+            await raydium.launchpad.getRpcPoolInfo({
+              poolId,
+            });
+
+          assertKodiakLaunchpadPool(
+            poolInfo.platformId,
+            kodiakPlatformId,
+          );
+
+          const platformAccount =
+            await connection.getAccountInfo(
+              poolInfo.platformId,
+              "confirmed",
+            );
+
+          if (!platformAccount) {
+            throw new Error(
+              `The LaunchLab PlatformConfig account was not found on ${NETWORK_LABEL}.`,
+            );
+          }
+
+          const platformInfo =
+            PlatformConfig.decode(
+              platformAccount.data,
+            );
+
+          return raydium.launchpad.buyToken({
+            programId:
+              KODIAK_LAUNCHPAD_PROGRAM_ID,
+            mintA,
+            mintAProgram:
+              new PublicKey(
+                mintInfo.programId,
+              ),
+            poolInfo,
+            slippage:
+              TRADE_SLIPPAGE,
+            configInfo:
+              poolInfo.configInfo,
+            platformFeeRate:
+              platformInfo.feeRate,
+            txVersion:
+              TxVersion.V0,
+            buyAmount:
+              new BN(
+                lamports,
+              ),
+          });
+        };
+
+      const simulationBuild =
+        await buildBondingBuy();
 
       setEstimatedTokens(
-        extInfo.decimalOutAmount.toString(),
+        simulationBuild.extInfo.decimalOutAmount.toString(),
       );
-      setPoolIdText(poolId.toBase58());
+      setPoolIdText(
+        poolId.toBase58(),
+      );
 
       setStatus({
         kind: "working",
@@ -1415,17 +1610,21 @@ export default function TradePage() {
       });
 
       const simulation =
-        transaction instanceof VersionedTransaction
+        simulationBuild.transaction instanceof
+        VersionedTransaction
           ? await connection.simulateTransaction(
-              transaction,
+              simulationBuild.transaction,
               {
-                commitment: "confirmed",
-                replaceRecentBlockhash: true,
-                sigVerify: false,
+                commitment:
+                  "confirmed",
+                replaceRecentBlockhash:
+                  true,
+                sigVerify:
+                  false,
               },
             )
           : await connection.simulateTransaction(
-              transaction,
+              simulationBuild.transaction,
             );
 
       if (simulation.value.err) {
@@ -1439,15 +1638,51 @@ export default function TradePage() {
         return;
       }
 
+      const postSimulationGraduation =
+        await loadGraduationState(
+          normalizedMint,
+          {
+            silent:
+              true,
+          },
+        );
+
+      if (
+        !postSimulationGraduation ||
+        !postSimulationGraduation.trading.launchpadActive ||
+        postSimulationGraduation.trading.graduationReady ||
+        postSimulationGraduation.trading.graduated ||
+        postSimulationGraduation.trading.cancelled
+      ) {
+        throw new Error(
+          "This token's LaunchLab state changed after simulation. No wallet request was opened; refresh and try again.",
+        );
+      }
+
       setStatus({
         kind: "working",
         message:
-          `Simulation passed. Approve the ${NETWORK_LABEL} buy in your wallet...`,
+          "Simulation passed. Reloading the live curve and rebuilding the buy before wallet approval...",
       });
 
-      const result = await execute({
-        sendAndConfirm: true,
+      const freshBuild =
+        await buildBondingBuy();
+
+      setEstimatedTokens(
+        freshBuild.extInfo.decimalOutAmount.toString(),
+      );
+
+      setStatus({
+        kind: "working",
+        message:
+          `Fresh curve quote built after simulation. Approve the ${NETWORK_LABEL} buy in your wallet...`,
       });
+
+      const result =
+        await freshBuild.execute({
+          sendAndConfirm:
+            true,
+        });
 
       const signature = collectSignature(result);
 
@@ -1684,29 +1919,13 @@ export default function TradePage() {
         signAllTransactions,
       });
 
-      const poolInfo =
-        await raydium.launchpad.getRpcPoolInfo({
-          poolId,
-        });
-
-      const platformAccount =
-        await connection.getAccountInfo(
-          poolInfo.platformId,
-          "confirmed",
-        );
-
-      if (!platformAccount) {
-        throw new Error(
-          `The LaunchLab PlatformConfig account was not found on ${NETWORK_LABEL}.`,
-        );
-      }
-
-      const platformInfo = PlatformConfig.decode(
-        platformAccount.data,
-      );
+      const kodiakPlatformId =
+        await getKodiakPlatformId();
 
       const mintInfo =
-        await raydium.token.getTokenInfo(mintA);
+        await raydium.token.getTokenInfo(
+          mintA,
+        );
 
       /*
        * IMPORTANT:
@@ -1718,39 +1937,87 @@ export default function TradePage() {
        * output from the current bonding curve and applies
        * the 1% slippage protection itself.
        */
-      const {
-        transaction,
-        extInfo,
-        execute,
-      } = await raydium.launchpad.sellToken({
-        programId: KODIAK_LAUNCHPAD_PROGRAM_ID,
-        mintA,
-        mintAProgram: new PublicKey(
-          mintInfo.programId,
-        ),
-        mintB: NATIVE_MINT,
-        poolInfo,
-        configInfo: poolInfo.configInfo,
-        platformFeeRate: platformInfo.feeRate,
-        txVersion: TxVersion.V0,
-        feePayer: publicKey,
-        sellAmount: rawSellAmount,
-        slippage: TRADE_SLIPPAGE,
-      });
+      const buildBondingSell =
+        async () => {
+          const poolInfo =
+            await raydium.launchpad.getRpcPoolInfo({
+              poolId,
+            });
 
-      const estimatedLamports = Number(
-        extInfo.outAmount.toString(),
-      );
+          assertKodiakLaunchpadPool(
+            poolInfo.platformId,
+            kodiakPlatformId,
+          );
 
-      if (Number.isFinite(estimatedLamports)) {
+          const platformAccount =
+            await connection.getAccountInfo(
+              poolInfo.platformId,
+              "confirmed",
+            );
+
+          if (!platformAccount) {
+            throw new Error(
+              `The LaunchLab PlatformConfig account was not found on ${NETWORK_LABEL}.`,
+            );
+          }
+
+          const platformInfo =
+            PlatformConfig.decode(
+              platformAccount.data,
+            );
+
+          return raydium.launchpad.sellToken({
+            programId:
+              KODIAK_LAUNCHPAD_PROGRAM_ID,
+            mintA,
+            mintAProgram:
+              new PublicKey(
+                mintInfo.programId,
+              ),
+            mintB:
+              NATIVE_MINT,
+            poolInfo,
+            configInfo:
+              poolInfo.configInfo,
+            platformFeeRate:
+              platformInfo.feeRate,
+            txVersion:
+              TxVersion.V0,
+            feePayer:
+              publicKey,
+            sellAmount:
+              rawSellAmount,
+            slippage:
+              TRADE_SLIPPAGE,
+          });
+        };
+
+      const simulationBuild =
+        await buildBondingSell();
+
+      let estimatedLamports =
+        Number(
+          simulationBuild.extInfo.outAmount.toString(),
+        );
+
+      if (
+        Number.isFinite(
+          estimatedLamports,
+        )
+      ) {
         setEstimatedSellSol(
           (
-            estimatedLamports / LAMPORTS_PER_SOL
-          ).toFixed(9),
+            estimatedLamports /
+            LAMPORTS_PER_SOL
+          ).toFixed(
+            9,
+          ),
         );
       }
 
-      setPoolIdText(poolId.toBase58());
+      setPoolIdText(
+        poolId.toBase58(),
+      );
 
       setStatus({
         kind: "working",
@@ -1759,17 +2026,21 @@ export default function TradePage() {
       });
 
       const simulation =
-        transaction instanceof VersionedTransaction
+        simulationBuild.transaction instanceof
+        VersionedTransaction
           ? await connection.simulateTransaction(
-              transaction,
+              simulationBuild.transaction,
               {
-                commitment: "confirmed",
-                replaceRecentBlockhash: true,
-                sigVerify: false,
+                commitment:
+                  "confirmed",
+                replaceRecentBlockhash:
+                  true,
+                sigVerify:
+                  false,
               },
             )
           : await connection.simulateTransaction(
-              transaction,
+              simulationBuild.transaction,
             );
 
       if (simulation.value.err) {
@@ -1783,15 +2054,67 @@ export default function TradePage() {
         return;
       }
 
+      const postSimulationGraduation =
+        await loadGraduationState(
+          normalizedMint,
+          {
+            silent:
+              true,
+          },
+        );
+
+      if (
+        !postSimulationGraduation ||
+        !postSimulationGraduation.trading.launchpadActive ||
+        postSimulationGraduation.trading.graduationReady ||
+        postSimulationGraduation.trading.graduated ||
+        postSimulationGraduation.trading.cancelled
+      ) {
+        throw new Error(
+          "This token's LaunchLab state changed after simulation. No wallet request was opened; refresh and try again.",
+        );
+      }
+
       setStatus({
         kind: "working",
         message:
-          `Simulation passed. Approve the ${NETWORK_LABEL} sell in your wallet...`,
+          "Simulation passed. Reloading the live curve and rebuilding the sell before wallet approval...",
       });
 
-      const result = await execute({
-        sendAndConfirm: true,
+      const freshBuild =
+        await buildBondingSell();
+
+      estimatedLamports =
+        Number(
+          freshBuild.extInfo.outAmount.toString(),
+        );
+
+      if (
+        Number.isFinite(
+          estimatedLamports,
+        )
+      ) {
+        setEstimatedSellSol(
+          (
+            estimatedLamports /
+            LAMPORTS_PER_SOL
+          ).toFixed(
+            9,
+          ),
+        );
+      }
+
+      setStatus({
+        kind: "working",
+        message:
+          `Fresh curve quote built after simulation. Approve the ${NETWORK_LABEL} sell in your wallet...`,
       });
+
+      const result =
+        await freshBuild.execute({
+          sendAndConfirm:
+            true,
+        });
 
       const signature = collectSignature(result);
 

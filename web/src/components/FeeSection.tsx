@@ -1,8 +1,14 @@
+import { KODIAK_FEE_LABELS } from "@/lib/fees";
+
 const fees = [
-  ["Kodiak platform fee", "0.50%", "Curve trades"],
-  ["Raydium protocol fee", "0.25%", "Curve trades"],
-  ["Creator fee", "0.45%", "Curve trades · claimable"],
-  ["Post-migration creator rewards", "10% LP share", "Fee Key NFT after graduation"],
+  ["Kodiak platform fee", KODIAK_FEE_LABELS.kodiakPlatform, "Curve trades"],
+  ["Raydium protocol fee", KODIAK_FEE_LABELS.raydiumProtocol, "Curve trades"],
+  ["Creator fee", KODIAK_FEE_LABELS.creatorCurve, "Curve trades · claimable"],
+  [
+    "Post-migration creator rewards",
+    `${KODIAK_FEE_LABELS.creatorFeeKeyLpShare} LP share`,
+    "Fee Key NFT after graduation",
+  ],
 ];
 
 export function FeeSection() {

@@ -4,7 +4,12 @@ import {
 } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import {
+  CREATE_CPMM_POOL_PROGRAM,
+  DEVNET_PROGRAM_ID,
+  getCpmmPdaPoolId,
   getPdaLaunchpadPoolId,
+  LaunchpadPool,
+  PlatformConfig,
 } from "@raydium-io/raydium-sdk-v2";
 
 import {
@@ -20,7 +25,9 @@ import {
   recordCreatorReward,
 } from "@/lib/creator-rewards";
 import {
+  KODIAK_IS_DEVNET,
   KODIAK_IS_MAINNET,
+  KODIAK_MAINNET_CPMM_CONFIG_ID,
   KODIAK_RPC_URL,
 } from "@/lib/solana/network";
 
@@ -160,6 +167,7 @@ function transactionUsesProgram(
 async function identifyTrade(
   signature: string,
   mint: string,
+  allowedProgramId: PublicKey,
 ) {
   const parsed =
     await connection
@@ -178,7 +186,7 @@ async function identifyTrade(
     parsed.meta?.err ||
     !transactionUsesProgram(
       parsed,
-      KODIAK_LAUNCHPAD_PROGRAM_ID,
+      allowedProgramId,
     )
   ) {
     return null;
@@ -295,6 +303,100 @@ function validPrice(
     : undefined;
 }
 
+function cpmmProgramId() {
+  return KODIAK_IS_DEVNET
+    ? DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_PROGRAM
+    : CREATE_CPMM_POOL_PROGRAM;
+}
+
+async function findCpmmPoolForLaunchpad(
+  launchpadPoolId: PublicKey,
+) {
+  const account =
+    await connection.getAccountInfo(
+      launchpadPoolId,
+      "confirmed",
+    );
+
+  if (!account) {
+    return null;
+  }
+
+  const poolInfo =
+    LaunchpadPool.decode(
+      account.data,
+    );
+
+  if (Number(poolInfo.status) !== 1) {
+    return null;
+  }
+
+  const platformAccount =
+    await connection.getAccountInfo(
+      poolInfo.platformId,
+      "confirmed",
+    );
+
+  if (!platformAccount) {
+    return null;
+  }
+
+  const platformInfo =
+    PlatformConfig.decode(
+      platformAccount.data,
+    );
+
+  const cpConfigId =
+    platformInfo.cpConfigId;
+
+  if (
+    KODIAK_IS_MAINNET &&
+    cpConfigId.toBase58() !==
+      KODIAK_MAINNET_CPMM_CONFIG_ID
+  ) {
+    throw new Error(
+      "Kodiak Mainnet PlatformConfig CPMM target no longer matches the verified configuration.",
+    );
+  }
+
+  const programId =
+    cpmmProgramId();
+
+  const candidates = [
+    getCpmmPdaPoolId(
+      programId,
+      cpConfigId,
+      poolInfo.mintA,
+      poolInfo.mintB,
+    ).publicKey,
+    getCpmmPdaPoolId(
+      programId,
+      cpConfigId,
+      poolInfo.mintB,
+      poolInfo.mintA,
+    ).publicKey,
+  ];
+
+  for (const candidate of candidates) {
+    const candidateAccount =
+      await connection.getAccountInfo(
+        candidate,
+        "confirmed",
+      );
+
+    if (
+      candidateAccount &&
+      candidateAccount.owner.equals(
+        programId,
+      )
+    ) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 /*
  * Reconcile trades that happened directly through Phantom, Jupiter, Raydium,
  * or another interface.
@@ -313,49 +415,70 @@ export async function syncRecentLaunchpadTrades(
   mint: string,
 ) {
   const mintKey =
-    new PublicKey(
-      mint,
-    );
+    new PublicKey(mint);
 
-  const poolId =
+  const launchpadPoolId =
     getPdaLaunchpadPoolId(
       KODIAK_LAUNCHPAD_PROGRAM_ID,
       mintKey,
       NATIVE_MINT,
     ).publicKey;
 
-  const existing =
-    await getTrades(
-      mint,
+  const cpmmPoolId =
+    await findCpmmPoolForLaunchpad(
+      launchpadPoolId,
     );
+
+  const existing =
+    await getTrades(mint);
 
   const known =
     new Set(
       existing.map(
-        (trade) =>
-          trade.signature,
+        (trade) => trade.signature,
       ),
     );
 
-  const signatures =
-    await connection
-      .getSignaturesForAddress(
-        poolId,
-        {
-          limit:
-            100,
-        },
-        "confirmed",
-      );
+  const watchedPools = [
+    {
+      poolId: launchpadPoolId,
+      programId: KODIAK_LAUNCHPAD_PROGRAM_ID,
+    },
+    ...(cpmmPoolId
+      ? [{
+          poolId: cpmmPoolId,
+          programId: cpmmProgramId(),
+        }]
+      : []),
+  ];
+
+  const signatureRows =
+    await Promise.all(
+      watchedPools.map(
+        async (market) => ({
+          ...market,
+          signatures:
+            await connection.getSignaturesForAddress(
+              market.poolId,
+              { limit: 100 },
+              "confirmed",
+            ),
+        }),
+      ),
+    );
 
   const missing =
-    signatures
+    signatureRows
+      .flatMap((market) =>
+        market.signatures.map((entry) => ({
+          ...entry,
+          programId: market.programId,
+        })),
+      )
       .filter(
         (entry) =>
           entry.err === null &&
-          !known.has(
-            entry.signature,
-          ),
+          !known.has(entry.signature),
       )
       .sort(
         (a, b) =>
@@ -363,22 +486,16 @@ export async function syncRecentLaunchpadTrades(
           (b.blockTime ?? 0),
       );
 
-  const saved:
-    StoredTrade[] =
-      [];
+  const saved: StoredTrade[] = [];
+  let workingTrades = [...existing];
 
-  let workingTrades =
-    [...existing];
-
-  for (
-    const entry of
-    missing
-  ) {
+  for (const entry of missing) {
     try {
       const identity =
         await identifyTrade(
           entry.signature,
           mint,
+          entry.programId,
         );
 
       if (!identity) {
@@ -394,135 +511,95 @@ export async function syncRecentLaunchpadTrades(
         );
 
       const solAmount =
-        Number(
-          inferred.quoteAmountSol,
-        );
-
+        Number(inferred.quoteAmountSol);
       const tokenAmount =
-        Number(
-          inferred.tokenAmount,
-        );
+        Number(inferred.tokenAmount);
 
       if (
-        !Number.isFinite(
-          solAmount,
-        ) ||
+        !Number.isFinite(solAmount) ||
         solAmount <= 0 ||
-        !Number.isFinite(
-          tokenAmount,
-        ) ||
+        !Number.isFinite(tokenAmount) ||
         tokenAmount <= 0
       ) {
         continue;
       }
 
       const executionPrice =
-        solAmount /
-        tokenAmount;
+        solAmount / tokenAmount;
 
       const previousClose =
         validPrice(
-          workingTrades.at(
-            -1,
-          )?.closePriceSol,
+          workingTrades.at(-1)
+            ?.closePriceSol,
         );
-
       const inferredOpen =
-        validPrice(
-          inferred.openPriceSol,
-        );
-
+        validPrice(inferred.openPriceSol);
       const inferredClose =
-        validPrice(
-          inferred.closePriceSol,
-        );
+        validPrice(inferred.closePriceSol);
 
+      /*
+       * CPMM has authoritative transaction-local pre/post reserve prices.
+       * LaunchLab keeps the previous verified close as its candle open so
+       * virtual-curve candles remain continuous.
+       */
       const openPriceSol =
-        previousClose ??
-        inferredOpen;
+        inferred.marketType === "cpmm"
+          ? inferredOpen
+          : previousClose ?? inferredOpen;
 
       const directionMatches =
-        openPriceSol &&
-        inferredClose
-          ? identity.side ===
-            "buy"
-            ? inferredClose >
-              openPriceSol
-            : inferredClose <
-              openPriceSol
+        openPriceSol && inferredClose
+          ? identity.side === "buy"
+            ? inferredClose > openPriceSol
+            : inferredClose < openPriceSol
           : false;
 
-      const trade:
-        StoredTrade = {
-          mint,
-          wallet:
-            identity.wallet,
-          signature:
-            entry.signature,
-          side:
-            identity.side,
-          solAmount,
-          tokenAmount,
-          priceSol:
-            executionPrice,
-          timestamp:
-            inferred.timestamp ||
-            entry.blockTime ||
-            Math.floor(
-              Date.now() /
-                1000,
-            ),
-          ...(directionMatches
-            ? {
-                openPriceSol,
-                closePriceSol:
-                  inferredClose,
-              }
-            : {}),
-        };
+      const trade: StoredTrade = {
+        mint,
+        wallet: identity.wallet,
+        signature: entry.signature,
+        side: identity.side,
+        solAmount,
+        tokenAmount,
+        priceSol: executionPrice,
+        timestamp:
+          inferred.timestamp ||
+          entry.blockTime ||
+          Math.floor(Date.now() / 1000),
+        ...(directionMatches
+          ? {
+              openPriceSol,
+              closePriceSol: inferredClose,
+            }
+          : {}),
+      };
 
       const stored =
-        await saveTrade(
-          trade,
-        );
+        await saveTrade(trade);
 
       workingTrades =
         [...workingTrades, stored]
           .sort(
             (a, b) =>
-              a.timestamp -
-              b.timestamp,
+              a.timestamp - b.timestamp,
           );
 
       try {
-        await recordCreatorReward(
-          stored,
-        );
-      } catch (
-        rewardError
-      ) {
+        await recordCreatorReward(stored);
+      } catch (rewardError) {
         console.error(
           "External trade creator reward ledger write failed:",
           rewardError,
         );
       }
 
-      saved.push(
-        stored,
-      );
-    } catch (
-      error
-    ) {
-      /*
-       * A pool address also appears in non-trade transactions such as launch
-       * creation and migration. Skip anything that cannot be proven to be a
-       * real wallet token delta.
-       */
+      saved.push(stored);
+      known.add(entry.signature);
+    } catch (error) {
       console.info(
-        "Kodiak skipped a non-trade or not-yet-readable pool transaction:",
+        "Kodiak skipped a non-trade or not-yet-readable market transaction:",
         entry.signature,
-        error instanceof
-          Error
+        error instanceof Error
           ? error.message
           : error,
       );
@@ -530,12 +607,13 @@ export async function syncRecentLaunchpadTrades(
   }
 
   return {
-    poolId:
-      poolId.toBase58(),
-    discovered:
-      saved.length,
-    trades:
-      workingTrades,
+    poolId: launchpadPoolId.toBase58(),
+    launchpadPoolId:
+      launchpadPoolId.toBase58(),
+    cpmmPoolId:
+      cpmmPoolId?.toBase58() ?? null,
+    discovered: saved.length,
+    trades: workingTrades,
   };
 }
 

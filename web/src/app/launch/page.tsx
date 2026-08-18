@@ -666,6 +666,27 @@ export default function LaunchPage() {
       for (let index = 0; index < freshBuild.transactions.length; index += 1) {
         const unsignedTransaction = freshBuild.transactions[index];
 
+        /*
+         * Raydium can return a transaction whose blockhash has aged while
+         * Kodiak performs its safety simulation and waits for the creator to
+         * review the diagnostics. Refresh it at the last possible moment,
+         * immediately before Phantom signs.
+         *
+         * Changing the blockhash invalidates any existing signatures, so clear
+         * them before wallet signing. Phantom signs first; Kodiak then adds the
+         * mint keypair signature below.
+         */
+        const latestBlockhash =
+          await connection.getLatestBlockhash("confirmed");
+
+        unsignedTransaction.message.recentBlockhash =
+          latestBlockhash.blockhash;
+
+        unsignedTransaction.signatures =
+          unsignedTransaction.signatures.map(
+            () => new Uint8Array(64),
+          );
+
         const walletSignedTransaction =
           await signTransaction(unsignedTransaction);
 
@@ -693,7 +714,11 @@ export default function LaunchPage() {
 
         const confirmation =
           await connection.confirmTransaction(
-            signature,
+            {
+              signature,
+              blockhash: latestBlockhash.blockhash,
+              lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+            },
             "confirmed",
           );
 

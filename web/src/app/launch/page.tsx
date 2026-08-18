@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { KODIAK_FEE_LABELS } from "@/lib/fees";
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import BN from "bn.js";
 import {
   getPdaLaunchpadConfigId,
@@ -41,6 +41,13 @@ type SimulationDiagnostic = {
   passedCount: number;
   checkedAt: string;
   walletHandoffStarted: boolean;
+  feePayer: string;
+  programIds: string[];
+  estimatedNetworkFeeSol: number | null;
+  estimatedWalletDebitSol: number | null;
+  initialBuySol: number;
+  unitsConsumed: number | null;
+  logs: string[];
   walletError?: string;
 };
 
@@ -118,6 +125,11 @@ export default function LaunchPage() {
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [simulationDiagnostic, setSimulationDiagnostic] =
     useState<SimulationDiagnostic | null>(null);
+  const [walletApprovalReady, setWalletApprovalReady] = useState(false);
+  const approvalGateRef = useRef<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+  } | null>(null);
   const [launchStatus, setLaunchStatus] = useState<
     | { kind: "idle"; message: string }
     | { kind: "working"; message: string }
@@ -237,6 +249,11 @@ export default function LaunchPage() {
     setForm(initialForm);
     setLogoPreview(null);
     setBannerPreview(null);
+    approvalGateRef.current?.reject(
+      new Error("Prepared launch cancelled before wallet handoff."),
+    );
+    approvalGateRef.current = null;
+    setWalletApprovalReady(false);
     setSimulationDiagnostic(null);
     setLaunchStatus({
       kind: "idle",
@@ -277,11 +294,21 @@ export default function LaunchPage() {
       return;
     }
 
+    approvalGateRef.current?.reject(
+      new Error("A newer launch preparation replaced the previous one."),
+    );
+    approvalGateRef.current = null;
+    setWalletApprovalReady(false);
     setSimulationDiagnostic(null);
 
     let kodiakSimulationPassed = false;
     let transactionCount = 0;
     let passedCount = 0;
+    const diagnosticPrograms = new Set<string>();
+    const diagnosticLogs: string[] = [];
+    let estimatedNetworkFeeLamports = 0;
+    let estimatedWalletDebitLamports = 0;
+    let totalUnitsConsumed = 0;
 
     try {
       const configResponse = await fetch("/api/config", {
@@ -460,14 +487,75 @@ export default function LaunchPage() {
 
       for (let index = 0; index < simulationBuild.transactions.length; index += 1) {
         const transaction = simulationBuild.transactions[index];
+
+        const programIds =
+          transaction instanceof VersionedTransaction
+            ? transaction.message.compiledInstructions
+                .map((instruction) =>
+                  transaction.message.staticAccountKeys[
+                    instruction.programIdIndex
+                  ]?.toBase58(),
+                )
+                .filter((value): value is string => Boolean(value))
+            : transaction.instructions.map((instruction) =>
+                instruction.programId.toBase58(),
+              );
+
+        programIds.forEach((programId) =>
+          diagnosticPrograms.add(programId),
+        );
+
+        const feeResult =
+          transaction instanceof VersionedTransaction
+            ? await connection.getFeeForMessage(
+                transaction.message,
+                "confirmed",
+              )
+            : await connection.getFeeForMessage(
+                transaction.compileMessage(),
+                "confirmed",
+              );
+
+        if (typeof feeResult.value === "number") {
+          estimatedNetworkFeeLamports += feeResult.value;
+        }
+
+        const payerBalanceBefore = await connection.getBalance(
+          publicKey,
+          "confirmed",
+        );
+
         const simulation =
           transaction instanceof VersionedTransaction
             ? await connection.simulateTransaction(transaction, {
                 commitment: "confirmed",
                 replaceRecentBlockhash: true,
                 sigVerify: false,
+                accounts: {
+                  encoding: "base64",
+                  addresses: [publicKey.toBase58()],
+                },
               })
             : await connection.simulateTransaction(transaction);
+
+        const transactionLogs = simulation.value.logs ?? [];
+        diagnosticLogs.push(
+          `--- Transaction ${index + 1} of ${transactionCount} ---`,
+          ...transactionLogs,
+        );
+
+        if (typeof simulation.value.unitsConsumed === "number") {
+          totalUnitsConsumed += simulation.value.unitsConsumed;
+        }
+
+        const payerAfter = simulation.value.accounts?.[0]?.lamports;
+
+        if (typeof payerAfter === "number") {
+          estimatedWalletDebitLamports += Math.max(
+            payerBalanceBefore - payerAfter,
+            0,
+          );
+        }
 
         if (simulation.value.err) {
           setSimulationDiagnostic({
@@ -476,6 +564,20 @@ export default function LaunchPage() {
             passedCount,
             checkedAt: new Date().toLocaleTimeString(),
             walletHandoffStarted: false,
+            feePayer: publicKey.toBase58(),
+            programIds: Array.from(diagnosticPrograms),
+            estimatedNetworkFeeSol:
+              estimatedNetworkFeeLamports > 0
+                ? estimatedNetworkFeeLamports / 1_000_000_000
+                : null,
+            estimatedWalletDebitSol:
+              estimatedWalletDebitLamports > 0
+                ? estimatedWalletDebitLamports / 1_000_000_000
+                : null,
+            initialBuySol,
+            unitsConsumed:
+              totalUnitsConsumed > 0 ? totalUnitsConsumed : null,
+            logs: diagnosticLogs,
           });
 
           setLaunchStatus({
@@ -499,6 +601,20 @@ export default function LaunchPage() {
         passedCount,
         checkedAt: new Date().toLocaleTimeString(),
         walletHandoffStarted: false,
+        feePayer: publicKey.toBase58(),
+        programIds: Array.from(diagnosticPrograms),
+        estimatedNetworkFeeSol:
+          estimatedNetworkFeeLamports > 0
+            ? estimatedNetworkFeeLamports / 1_000_000_000
+            : null,
+        estimatedWalletDebitSol:
+          estimatedWalletDebitLamports > 0
+            ? estimatedWalletDebitLamports / 1_000_000_000
+            : null,
+        initialBuySol,
+        unitsConsumed:
+          totalUnitsConsumed > 0 ? totalUnitsConsumed : null,
+        logs: diagnosticLogs,
       });
 
       setLaunchStatus({
@@ -519,6 +635,21 @@ export default function LaunchPage() {
         );
       }
 
+      setLaunchStatus({
+        kind: "idle",
+        message:
+          "Kodiak simulation PASSED. Review the transaction diagnostics below. The wallet will not open until you explicitly continue.",
+      });
+
+      setWalletApprovalReady(true);
+
+      await new Promise<void>((resolve, reject) => {
+        approvalGateRef.current = { resolve, reject };
+      });
+
+      approvalGateRef.current = null;
+      setWalletApprovalReady(false);
+
       setSimulationDiagnostic((current) =>
         current
           ? {
@@ -531,14 +662,12 @@ export default function LaunchPage() {
       setLaunchStatus({
         kind: "working",
         message:
-          "Fresh launch transaction built after simulation. Approve the transaction in your wallet.",
+          `Opening your wallet with the already-audited ${NETWORK_LABEL} launch transaction...`,
       });
 
       /*
-       * IMPORTANT:
        * execute() comes from the SECOND build, not the simulation build.
-       * That avoids intentionally handing the wallet the older transaction
-       * objects whose blockhashes existed before simulation completed.
+       * The explicit approval gate above prevents automatic wallet handoff.
        */
       const sent =
         await freshBuild.execute({
@@ -749,6 +878,23 @@ export default function LaunchPage() {
           passedCount: current?.passedCount ?? passedCount,
           checkedAt: current?.checkedAt ?? new Date().toLocaleTimeString(),
           walletHandoffStarted: current?.walletHandoffStarted ?? false,
+          feePayer: current?.feePayer ?? publicKey.toBase58(),
+          programIds: current?.programIds ?? Array.from(diagnosticPrograms),
+          estimatedNetworkFeeSol:
+            current?.estimatedNetworkFeeSol ??
+            (estimatedNetworkFeeLamports > 0
+              ? estimatedNetworkFeeLamports / 1_000_000_000
+              : null),
+          estimatedWalletDebitSol:
+            current?.estimatedWalletDebitSol ??
+            (estimatedWalletDebitLamports > 0
+              ? estimatedWalletDebitLamports / 1_000_000_000
+              : null),
+          initialBuySol: current?.initialBuySol ?? Number(form.initialBuySol || 0),
+          unitsConsumed:
+            current?.unitsConsumed ??
+            (totalUnitsConsumed > 0 ? totalUnitsConsumed : null),
+          logs: current?.logs ?? diagnosticLogs,
           walletError: walletOrLaunchError,
         }));
 
@@ -767,6 +913,26 @@ export default function LaunchPage() {
         logs,
       });
     }
+  };
+
+  const continueToWallet = () => {
+    if (!walletApprovalReady || !approvalGateRef.current) {
+      return;
+    }
+
+    approvalGateRef.current.resolve();
+  };
+
+  const cancelPreparedLaunch = () => {
+    if (!approvalGateRef.current) {
+      return;
+    }
+
+    approvalGateRef.current.reject(
+      new Error("Prepared launch cancelled before wallet handoff."),
+    );
+    approvalGateRef.current = null;
+    setWalletApprovalReady(false);
   };
 
   return (
@@ -992,7 +1158,7 @@ export default function LaunchPage() {
                   </p>
 
                   <h3 className="mt-2 text-lg font-black">
-                    90% burned ÃÂ· 10% creator Fee Key
+                    90% burned Â· 10% creator Fee Key
                   </h3>
 
                   <p className="mt-2 text-sm leading-6 text-zinc-400">
@@ -1089,6 +1255,98 @@ export default function LaunchPage() {
                           {simulationDiagnostic.transactionCount === 1 ? "" : "s"}{" "}
                           passed Kodiak&apos;s Solana RPC simulation.
                         </p>
+
+                        <div className="mt-4 grid gap-3 text-xs">
+                          <div className="rounded-xl border border-white/10 bg-black/25 p-3">
+                            <p className="font-black uppercase tracking-[0.12em] text-zinc-500">
+                              Fee payer
+                            </p>
+                            <p className="mt-2 break-all font-mono text-zinc-300">
+                              {simulationDiagnostic.feePayer}
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-black/25 p-3">
+                            <p className="font-black uppercase tracking-[0.12em] text-zinc-500">
+                              Estimated SOL impact
+                            </p>
+                            <p className="mt-2 text-zinc-300">
+                              Simulated wallet debit: {simulationDiagnostic.estimatedWalletDebitSol === null
+                                ? "Unavailable"
+                                : `${simulationDiagnostic.estimatedWalletDebitSol.toFixed(9)} SOL`}
+                            </p>
+                            <p className="mt-1 text-zinc-500">
+                              Estimated network fee: {simulationDiagnostic.estimatedNetworkFeeSol === null
+                                ? "Unavailable"
+                                : `${simulationDiagnostic.estimatedNetworkFeeSol.toFixed(9)} SOL`}
+                            </p>
+                            <p className="mt-1 text-zinc-500">
+                              Initial creator buy: {simulationDiagnostic.initialBuySol.toFixed(9)} SOL
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-black/25 p-3">
+                            <p className="font-black uppercase tracking-[0.12em] text-zinc-500">
+                              Programs invoked
+                            </p>
+                            <div className="mt-2 space-y-1">
+                              {simulationDiagnostic.programIds.map((programId) => (
+                                <p key={programId} className="break-all font-mono text-zinc-300">
+                                  {programId}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-black/25 p-3">
+                            <p className="font-black uppercase tracking-[0.12em] text-zinc-500">
+                              Simulation compute
+                            </p>
+                            <p className="mt-2 text-zinc-300">
+                              {simulationDiagnostic.unitsConsumed === null
+                                ? "Unavailable"
+                                : `${simulationDiagnostic.unitsConsumed.toLocaleString()} compute units`}
+                            </p>
+                          </div>
+
+                          <details className="rounded-xl border border-white/10 bg-black/25 p-3">
+                            <summary className="cursor-pointer font-black text-zinc-300">
+                              Full Solana simulation logs ({simulationDiagnostic.logs.length})
+                            </summary>
+                            <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-5 text-zinc-400">
+                              {simulationDiagnostic.logs.length > 0
+                                ? simulationDiagnostic.logs.join("\n")
+                                : "No program logs were returned."}
+                            </pre>
+                          </details>
+                        </div>
+
+                        {walletApprovalReady && simulationDiagnostic.passed && (
+                          <div className="mt-4 rounded-xl border border-amber-300/30 bg-amber-300/[0.06] p-4">
+                            <p className="text-sm font-black text-amber-300">
+                              Wallet handoff is paused
+                            </p>
+                            <p className="mt-2 text-xs leading-5 text-zinc-400">
+                              Review the fee payer, SOL impact, programs, and complete simulation logs above. Kodiak will not open the wallet until you continue.
+                            </p>
+                            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                              <button
+                                type="button"
+                                onClick={cancelPreparedLaunch}
+                                className="rounded-xl border border-white/10 px-4 py-3 font-black text-zinc-300"
+                              >
+                                Cancel prepared launch
+                              </button>
+                              <button
+                                type="button"
+                                onClick={continueToWallet}
+                                className="rounded-xl bg-amber-300 px-4 py-3 font-black text-black"
+                              >
+                                Continue to wallet
+                              </button>
+                            </div>
+                          </div>
+                        )}
 
                         {simulationDiagnostic.walletHandoffStarted && (
                           <p className="mt-2 text-xs leading-5 text-zinc-400">

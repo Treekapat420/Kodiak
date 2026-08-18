@@ -141,10 +141,10 @@ export default async function MainnetLaunchPreflightPage() {
         "NEXT_PUBLIC_SOLANA_NETWORK must request Mainnet so the final enable flag can activate the production network.",
     },
     {
-      label: "Global Mainnet switch remains locked",
-      pass: !mainnetEnabled,
+      label: "Global Mainnet switch is enabled",
+      pass: mainnetEnabled,
       detail:
-        "This preflight is designed to run before NEXT_PUBLIC_KODIAK_MAINNET_ENABLED is changed to true.",
+        "NEXT_PUBLIC_KODIAK_MAINNET_ENABLED must be true for this post-activation production verification.",
     },
     {
       label: "Dedicated Mainnet RPC configured",
@@ -396,13 +396,13 @@ export default async function MainnetLaunchPreflightPage() {
             color: allPassed ? "#55e6b2" : "#ff6b6b",
           }}
         >
-          {allPassed ? "PREFLIGHT PASS" : "MAINNET REMAINS LOCKED"}
+          {allPassed ? "MAINNET ACTIVATION VERIFIED" : "MAINNET VERIFICATION FAILED"}
         </div>
         <div style={{ marginTop: 10, color: "#b3b3bd", lineHeight: 1.6 }}>
           {passed} of {checks.length} checks passed.
           {allPassed
-            ? " Kodiak's launch dependencies are ready for the final controlled Mainnet enable step."
-            : " Every failed item must be resolved before the global Mainnet switch is enabled."}
+            ? " Kodiak is running in Mainnet mode and all audited production launch dependencies are aligned for the first controlled Mainnet launch."
+            : " One or more post-activation production checks failed. Do not submit a Mainnet launch transaction until every item passes."}
         </div>
       </div>
 

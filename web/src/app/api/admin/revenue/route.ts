@@ -51,6 +51,9 @@ const SUCCESS_FUND_TRANSFER_SIGNATURE_PREFIX =
 const DEVNET_PLATFORM_ID =
   "D33yYxh4JRtdeyLq7sFD8MzSjdtUa3uNFsSk39QHY8yT";
 
+const MAINNET_PLATFORM_ID =
+  "5d63yX2vRpyS2BPFwJJB15tMmctWCKwiKychEjP3gy4W";
+
 const CREATOR_SUCCESS_FUND_WALLET =
   "EJeXJ7Bf6nyJ2p4i7kR8Wyfdmi3JgpdU3iDRMCzZheWG";
 
@@ -59,17 +62,6 @@ const BPS_DENOMINATOR = 10_000;
 
 function networkLabel() {
   return KODIAK_IS_DEVNET ? "Devnet" : "Mainnet";
-}
-
-function assertRevenueVerificationReady() {
-  if (!KODIAK_IS_DEVNET) {
-    throw new Error(
-      "Kodiak Mainnet revenue verification is not enabled yet. " +
-        "The shared network layer is Mainnet-aware, but the production " +
-        "LaunchLab program and PlatformConfig must be verified before " +
-        "Mainnet revenue claims can be recorded.",
-    );
-  }
 }
 
 function createVerificationConnection() {
@@ -129,13 +121,8 @@ async function getPlatformId(): Promise<PublicKey> {
 
   const mainnetPlatformId =
     process.env.KODIAK_MAINNET_PLATFORM_ID?.trim() ||
-    process.env.NEXT_PUBLIC_KODIAK_MAINNET_PLATFORM_ID?.trim();
-
-  if (!mainnetPlatformId) {
-    throw new Error(
-      "Kodiak Mainnet PlatformConfig is not configured.",
-    );
-  }
+    process.env.NEXT_PUBLIC_KODIAK_MAINNET_PLATFORM_ID?.trim() ||
+    MAINNET_PLATFORM_ID;
 
   return new PublicKey(mainnetPlatformId);
 }
@@ -328,8 +315,6 @@ export async function POST(
   let signature = "";
 
   try {
-    assertRevenueVerificationReady();
-
     const body = (await request.json()) as {
       signature?: string;
     };
@@ -663,8 +648,6 @@ export async function PATCH(
   const redis = getRedis();
 
   try {
-    assertRevenueVerificationReady();
-
     const body = (await request.json()) as {
       signature?: string;
     };

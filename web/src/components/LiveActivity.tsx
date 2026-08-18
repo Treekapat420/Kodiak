@@ -64,7 +64,7 @@ type Payload = {
 const NETWORK_LABEL = kodiakNetworkLabel();
 
 function shortAddress(value: string) {
-  return value ? `${value.slice(0, 4)}â¦${value.slice(-4)}` : "â";
+  return value ? `${value.slice(0, 4)}...${value.slice(-4)}` : "-";
 }
 
 function formatSol(value: number) {
@@ -86,7 +86,7 @@ function timeAgo(timestamp: number) {
 
 export function LiveActivity() {
   const [payload, setPayload] = useState<Payload>({});
-  const [status, setStatus] = useState("Connecting to Kodiak activityâ¦");
+  const [status, setStatus] = useState("Connecting to Kodiak activity...");
 
   useEffect(() => {
     let cancelled = false;
@@ -112,7 +112,7 @@ export function LiveActivity() {
         if (!cancelled) {
           setPayload(next);
           setStatus(
-            `Live ${NETWORK_LABEL} data â¢ refreshes every 8 seconds`,
+            `Live ${NETWORK_LABEL} data - refreshes every 8 seconds`,
           );
         }
       } catch (error) {
@@ -168,7 +168,7 @@ export function LiveActivity() {
             href="/explore"
             className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-black text-zinc-200 transition hover:border-emerald-400/40"
           >
-            Explore all â
+            Explore all ->
           </Link>
         </div>
 
@@ -191,7 +191,7 @@ export function LiveActivity() {
           <Stat
             label="Buy pressure"
             value={stats.trades ? `${buyRatio}% buys` : "Waiting"}
-            hint={stats.trades ? `${stats.buys} buys â¢ ${stats.sells} sells` : "No trades yet"}
+            hint={stats.trades ? `${stats.buys} buys - ${stats.sells} sells` : "No trades yet"}
           />
         </div>
 
@@ -235,7 +235,7 @@ export function LiveActivity() {
                   Ranked from actual Kodiak trade activity
                 </p>
               </div>
-              <span className="text-2xl">ð»</span>
+              <span className="text-2xl">BEAR</span>
             </div>
 
             <div className="mt-5 space-y-3">
@@ -280,7 +280,7 @@ export function LiveActivity() {
                         <MiniStat label="Sells" value={String(token.sells)} />
                         <MiniStat
                           label="Buy %"
-                          value={totalSides ? `${tokenBuyRatio}%` : "â"}
+                          value={totalSides ? `${tokenBuyRatio}%` : "-"}
                         />
                       </div>
                     </Link>
@@ -336,14 +336,14 @@ function ActivityRow({ item }: { item: Activity }) {
         className="flex items-center gap-3 border-b border-white/[0.06] px-5 py-4 transition hover:bg-white/[0.03]"
       >
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-300/10 text-lg">
-          ð
+          NEW
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-black">
             ${item.symbol} launched
           </p>
           <p className="mt-1 truncate text-xs text-zinc-600">
-            by {shortAddress(item.creator)} â¢ {item.name}
+            by {shortAddress(item.creator)} - {item.name}
           </p>
         </div>
         <span className="shrink-0 text-xs font-bold text-zinc-600">
@@ -378,7 +378,7 @@ function ActivityRow({ item }: { item: Activity }) {
           ${item.symbol}
         </p>
         <p className="mt-1 truncate text-xs text-zinc-600">
-          {shortAddress(item.wallet)} â¢ {formatSol(item.solAmount)} SOL
+          {shortAddress(item.wallet)} - {formatSol(item.solAmount)} SOL
         </p>
       </div>
 

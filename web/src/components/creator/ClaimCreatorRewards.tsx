@@ -925,7 +925,9 @@ export function ClaimCreatorRewards() {
           type="button"
           disabled={
             !connected ||
-            busy
+            busy ||
+            claimableSol === null ||
+            claimableSol <= 0
           }
           onClick={() =>
             void claim()
@@ -935,7 +937,9 @@ export function ClaimCreatorRewards() {
           {busy &&
           !claimingFeeKey
             ? "Claiming..."
-            : "Claim Curve Rewards"}
+            : claimableSol !== null && claimableSol <= 0
+              ? "No Curve Rewards to Claim"
+              : "Claim Curve Rewards"}
         </button>
       </div>
 

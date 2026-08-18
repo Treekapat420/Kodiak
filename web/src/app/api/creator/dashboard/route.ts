@@ -5,7 +5,7 @@ import {
   getCreatorLedger,
   recordCreatorReward,
 } from "@/lib/creator-rewards";
-import { getTrades } from "@/lib/devnet-market";
+import { getSyncedTrades } from "@/lib/market-sync";
 import {
   KODIAK_IS_DEVNET,
   KODIAK_NETWORK,
@@ -343,7 +343,7 @@ export async function GET(
             launch,
           ) => {
             const trades =
-              await getTrades(
+              await getSyncedTrades(
                 launch.mint,
               );
 

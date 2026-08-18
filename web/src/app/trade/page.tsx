@@ -1368,6 +1368,72 @@ export default function TradePage() {
     });
   }
 
+  const diagnoseWalletTransaction = async (
+    transaction: VersionedTransaction,
+    label: string,
+  ) => {
+    const serializedBytes = transaction.serialize().length;
+    const requiredSigners =
+      transaction.message.header.numRequiredSignatures;
+    const staticAccounts =
+      transaction.message.staticAccountKeys.length;
+    const instructionCount =
+      transaction.message.compiledInstructions.length;
+
+    const simulation = await connection.simulateTransaction(
+      transaction,
+      {
+        commitment: "confirmed",
+        replaceRecentBlockhash: true,
+        sigVerify: false,
+      },
+    );
+
+    const summary =
+      `${label}: ${serializedBytes} serialized bytes, ` +
+      `${requiredSigners} required signer(s), ` +
+      `${staticAccounts} static account(s), ` +
+      `${instructionCount} instruction(s), ` +
+      `RPC simulation ${simulation.value.err ? "FAILED" : "PASSED"}.`;
+
+    console.info("[Kodiak transaction diagnostic]", {
+      label,
+      serializedBytes,
+      requiredSigners,
+      staticAccounts,
+      instructionCount,
+      simulationError: simulation.value.err,
+      unitsConsumed: simulation.value.unitsConsumed ?? null,
+      logs: simulation.value.logs ?? [],
+    });
+
+    if (serializedBytes >= 1232) {
+      throw new Error(
+        `${summary} Kodiak stopped before wallet handoff because the transaction meets or exceeds Solana's 1,232-byte serialized transaction limit.`,
+      );
+    }
+
+    if (simulation.value.err) {
+      throw new Error(
+        `${summary} Kodiak stopped before wallet handoff because the exact transaction failed RPC simulation: ${JSON.stringify(simulation.value.err)}`,
+      );
+    }
+
+    setTradeStatus({
+      kind: "working",
+      message:
+        `${summary} Opening Phantom with this exact transaction...`,
+    });
+
+    return {
+      serializedBytes,
+      requiredSigners,
+      staticAccounts,
+      instructionCount,
+      unitsConsumed: simulation.value.unitsConsumed ?? null,
+    };
+  };
+
   const sendFreshWalletTransaction = async (
     transaction: VersionedTransaction,
   ): Promise<string> => {
@@ -1772,6 +1838,11 @@ export default function TradePage() {
           `Kodiak stopped the buy before wallet handoff because Raydium returned ${freshBuild.signers.length} additional signer(s). No transaction was sent to Phantom.`,
         );
       }
+
+      await diagnoseWalletTransaction(
+        freshBuild.transaction,
+        "Bonding-curve buy diagnostic",
+      );
 
       const signature =
         await sendFreshWalletTransaction(

@@ -464,7 +464,6 @@ export default function LaunchPage() {
           slippage: new BN(100),
           buyAmount: new BN(initialBuyLamports),
           createOnly: initialBuyLamports === 0,
-          extraSigners: [mintKeypair],
         });
 
       setLaunchStatus({
@@ -648,87 +647,71 @@ export default function LaunchPage() {
       setLaunchStatus({
         kind: "working",
         message:
-          `Opening your wallet with the already-audited ${NETWORK_LABEL} launch transaction...`,
+          `Opening your wallet. Phantom signs first; Kodiak adds the mint signature only after wallet approval...`,
       });
 
       /*
-       * execute() comes from the SECOND build, not the simulation build.
-       * The explicit approval gate above prevents automatic wallet handoff.
+       * Phantom-first multi-signer flow:
+       *
+       * 1. Raydium builds the fresh unsigned VersionedTransaction.
+       * 2. Phantom signs that transaction first with signTransaction().
+       * 3. Kodiak adds the generated mint keypair signature afterward.
+       * 4. Kodiak broadcasts the fully signed bytes and confirms them itself.
+       *
+       * This deliberately bypasses freshBuild.execute() so the generated mint
+       * signer is not attached before Phantom gets the transaction.
        */
-      const sent =
-        await freshBuild.execute({
-          sequentially: true,
-        });
+      const uniqueSignatures: string[] = [];
 
-      const signatures: string[] = [];
+      for (let index = 0; index < freshBuild.transactions.length; index += 1) {
+        const unsignedTransaction = freshBuild.transactions[index];
 
-      const collectSignatures = (value: unknown) => {
-        if (typeof value === "string") {
-          signatures.push(value);
-          return;
-        }
+        const walletSignedTransaction =
+          await signTransaction(unsignedTransaction);
 
-        if (Array.isArray(value)) {
-          value.forEach(collectSignatures);
-          return;
-        }
+        walletSignedTransaction.sign([
+          mintKeypair,
+        ]);
 
-        if (typeof value === "object" && value !== null) {
-          Object.entries(value).forEach(([key, item]) => {
-            if (
-              (key === "txId" || key === "signature" || key === "txid") &&
-              typeof item === "string"
-            ) {
-              signatures.push(item);
-            } else {
-              collectSignatures(item);
-            }
-          });
-        }
-      };
-
-      collectSignatures(sent);
-      const mint = mintKeypair.publicKey.toBase58();
-
-      const looksLikeSolanaSignature = (value: string) =>
-        /^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(value);
-
-      let uniqueSignatures = Array.from(new Set(signatures)).filter(
-        looksLikeSolanaSignature,
-      );
-
-      if (uniqueSignatures.length === 0) {
         setLaunchStatus({
           kind: "working",
-          message: `Locating the confirmed launch transaction on ${NETWORK_LABEL}...`,
+          message: `Broadcasting ${NETWORK_LABEL} launch transaction ${
+            index + 1
+          } of ${freshBuild.transactions.length}...`,
         });
 
-        for (let attempt = 0; attempt < 8; attempt += 1) {
-          const onChainSignatures =
-            await connection.getSignaturesForAddress(
-              mintKeypair.publicKey,
-              { limit: 10 },
-              "confirmed",
-            );
+        const signature =
+          await connection.sendRawTransaction(
+            walletSignedTransaction.serialize(),
+            {
+              skipPreflight: false,
+              maxRetries: 5,
+            },
+          );
 
-          uniqueSignatures = onChainSignatures
-            .filter((entry) => entry.err === null)
-            .map((entry) => entry.signature)
-            .filter(looksLikeSolanaSignature);
+        uniqueSignatures.push(signature);
 
-          if (uniqueSignatures.length > 0) break;
+        const confirmation =
+          await connection.confirmTransaction(
+            signature,
+            "confirmed",
+          );
 
-          await new Promise((resolve) =>
-            window.setTimeout(resolve, 1200),
+        if (confirmation.value.err) {
+          throw new Error(
+            `Launch transaction ${index + 1} was submitted but failed on-chain: ${JSON.stringify(
+              confirmation.value.err,
+            )}`,
           );
         }
       }
 
+      const mint = mintKeypair.publicKey.toBase58();
       const launchSignature = uniqueSignatures[0];
 
       if (!launchSignature) {
         throw new Error(
-          "The token was created, but Kodiak could not locate its confirmed launch transaction. Do not launch again; check the mint on Solana Explorer.",
+          "Kodiak did not receive a launch transaction signature. Do not launch again until the mint is checked on Solana Explorer.",
         );
       }
 
@@ -1336,8 +1319,8 @@ export default function LaunchPage() {
 
                         {simulationDiagnostic.walletHandoffStarted && (
                           <p className="mt-2 text-xs leading-5 text-zinc-400">
-                            A fresh post-simulation transaction was built before
-                            wallet handoff.
+                            Phantom receives the fresh transaction before Kodiak adds
+                            the mint signature.
                           </p>
                         )}
 

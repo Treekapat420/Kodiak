@@ -1,5 +1,6 @@
 "use client";
 
+import { KODIAK_FEE_LABELS } from "@/lib/fees";
 import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useEffect, useState } from "react";
@@ -411,7 +412,7 @@ export default function DashboardPage() {
                   totals.creatorRewardsSol,
                   8,
                 )} SOL`}
-                note="0.45% of tracked trades"
+                note={`${KODIAK_FEE_LABELS.creatorCurve} of tracked trades`}
               />
 
               <Box
@@ -420,7 +421,7 @@ export default function DashboardPage() {
                   totals.kodiakFeesSol,
                   8,
                 )} SOL`}
-                note="0.50% platform accounting"
+                note={`${KODIAK_FEE_LABELS.kodiakPlatform} platform accounting`}
               />
 
               <Box
@@ -466,12 +467,12 @@ export default function DashboardPage() {
             <div className="space-y-3">
               <Row
                 label="Creator"
-                value="0.45%"
+                value={KODIAK_FEE_LABELS.creatorCurve}
               />
 
               <Row
                 label="Kodiak"
-                value="0.50%"
+                value={KODIAK_FEE_LABELS.kodiakPlatform}
               />
 
               <Row

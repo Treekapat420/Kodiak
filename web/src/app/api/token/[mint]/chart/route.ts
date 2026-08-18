@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   buildCandles,
-  getTrades,
 } from "@/lib/devnet-market";
+import {
+  getSyncedTrades,
+} from "@/lib/market-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +36,7 @@ export async function GET(
       ? requested
       : "1m";
 
-    const trades = await getTrades(mint);
+    const trades = await getSyncedTrades(mint);
     const candles = buildCandles(
       trades,
       intervalMap[interval],
@@ -44,7 +46,7 @@ export async function GET(
       {
         mint,
         interval,
-        source: "kodiak-trade-events",
+        source: "solana-reconciled-trade-events",
         candles,
       },
       {

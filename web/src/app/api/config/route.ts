@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { PublicKey } from "@solana/web3.js";
 
 import {
   KODIAK_IS_DEVNET,
@@ -14,26 +15,61 @@ const CONFIG_KEY_PREFIX = "kodiak:config:v2";
 const DEVNET_PLATFORM_ID =
   "D33yYxh4JRtdeyLq7sFD8MzSjdtUa3uNFsSk39QHY8yT";
 
+const MAINNET_PLATFORM_ID =
+  "5d63yX2vRpyS2BPFwJJB15tMmctWCKwiKychEjP3gy4W";
+
+function requireValidPublicKey(
+  value: string,
+  label: string,
+) {
+  try {
+    const publicKey =
+      new PublicKey(value);
+
+    if (
+      publicKey.toBase58() !==
+      value
+    ) {
+      throw new Error(
+        `${label} is not a canonical Solana public key.`,
+      );
+    }
+
+    return value;
+  } catch {
+    throw new Error(
+      `${label} is not a valid Solana public key.`,
+    );
+  }
+}
+
 function getPlatformId() {
   if (KODIAK_IS_DEVNET) {
-    return (
+    const devnetPlatformId =
       process.env.KODIAK_DEVNET_PLATFORM_ID?.trim() ||
       process.env.NEXT_PUBLIC_KODIAK_DEVNET_PLATFORM_ID?.trim() ||
-      DEVNET_PLATFORM_ID
+      DEVNET_PLATFORM_ID;
+
+    return requireValidPublicKey(
+      devnetPlatformId,
+      "Kodiak Devnet PlatformConfig",
     );
   }
 
+  /*
+   * Mainnet uses Kodiak's already-created and verified PlatformConfig as the
+   * final fallback. Environment variables may override it, but any supplied
+   * value must still be a valid canonical Solana public key.
+   */
   const mainnetPlatformId =
     process.env.KODIAK_MAINNET_PLATFORM_ID?.trim() ||
-    process.env.NEXT_PUBLIC_KODIAK_MAINNET_PLATFORM_ID?.trim();
+    process.env.NEXT_PUBLIC_KODIAK_MAINNET_PLATFORM_ID?.trim() ||
+    MAINNET_PLATFORM_ID;
 
-  if (!mainnetPlatformId) {
-    throw new Error(
-      "Kodiak Mainnet PlatformConfig is not configured. Set KODIAK_MAINNET_PLATFORM_ID before enabling Mainnet.",
-    );
-  }
-
-  return mainnetPlatformId;
+  return requireValidPublicKey(
+    mainnetPlatformId,
+    "Kodiak Mainnet PlatformConfig",
+  );
 }
 
 function getConfigKey() {
@@ -45,15 +81,22 @@ function buildDefaultConfig() {
     version: 2,
     network: KODIAK_NETWORK,
     platformId: getPlatformId(),
+
+    /*
+     * Display/accounting metadata for Kodiak's current LaunchLab fee model:
+     * 0.25% Raydium base + 0.45% creator + 0.50% Kodiak = 1.20% total.
+     */
     tradingFeeBps: 120,
     infrastructureFeeBps: 25,
     regularCreatorFeeBps: 45,
     regularKodiakFeeBps: 50,
+
     // Founding Creator status is a program/badge benefit only.
     // It does not alter the on-chain LaunchLab fee split.
     foundingCreatorFeeBps: 45,
     foundingKodiakFeeBps: 50,
     foundingCreatorLimit: 100,
+
     creatorSuccessFundPercentOfKodiakRevenue: 5,
     foundingProgramEnabled: true,
     maintenanceMode: false,
@@ -63,23 +106,39 @@ function buildDefaultConfig() {
 export async function GET() {
   try {
     const redis = getRedis();
-    const configKey = getConfigKey();
-    const defaultConfig = buildDefaultConfig();
+    const configKey =
+      getConfigKey();
+    const defaultConfig =
+      buildDefaultConfig();
 
     const stored =
-      await redis.get<Record<string, unknown>>(configKey);
+      await redis.get<
+        Record<string, unknown>
+      >(configKey);
 
     if (!stored) {
-      await redis.set(configKey, defaultConfig);
+      await redis.set(
+        configKey,
+        defaultConfig,
+      );
 
-      return NextResponse.json(defaultConfig);
+      return NextResponse.json(
+        defaultConfig,
+      );
     }
 
+    /*
+     * Stored feature/config values may be reused, but network and PlatformConfig
+     * are always derived from the active Kodiak deployment. This prevents stale
+     * Devnet Redis data from overriding Mainnet identity after the final switch.
+     */
     return NextResponse.json({
       ...defaultConfig,
       ...stored,
-      network: KODIAK_NETWORK,
-      platformId: defaultConfig.platformId,
+      network:
+        KODIAK_NETWORK,
+      platformId:
+        defaultConfig.platformId,
     });
   } catch (error) {
     return NextResponse.json(

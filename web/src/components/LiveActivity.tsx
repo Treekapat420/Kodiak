@@ -168,7 +168,7 @@ export function LiveActivity() {
             href="/explore"
             className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-black text-zinc-200 transition hover:border-emerald-400/40"
           >
-            Explore all ->
+            Explore all
           </Link>
         </div>
 

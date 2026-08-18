@@ -26,6 +26,7 @@ import {
 } from "@/lib/raydium/devnet";
 import {
   KODIAK_IS_DEVNET,
+  KODIAK_IS_MAINNET,
   kodiakExplorerTransactionUrl,
   kodiakNetworkLabel,
 } from "@/lib/solana/network";
@@ -80,6 +81,76 @@ type FeeKeyPosition = {
 };
 
 const NETWORK_LABEL = kodiakNetworkLabel();
+
+/*
+ * Canonical Raydium Mainnet program IDs.
+ *
+ * Keep these as a safety assertion around the SDK-built transaction. The
+ * Raydium SDK uses Mainnet defaults automatically, while Devnet requires the
+ * explicit DEVNET_PROGRAM_ID overrides below.
+ */
+const MAINNET_CPMM_PROGRAM_ID =
+  new PublicKey(
+    "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+  );
+
+const MAINNET_LOCK_CPMM_PROGRAM_ID =
+  new PublicKey(
+    "LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE",
+  );
+
+function expectedCpmmProgramId() {
+  return KODIAK_IS_DEVNET
+    ? DEVNET_PROGRAM_ID
+        .CREATE_CPMM_POOL_PROGRAM
+    : MAINNET_CPMM_PROGRAM_ID;
+}
+
+function expectedLockProgramId() {
+  return KODIAK_IS_DEVNET
+    ? DEVNET_PROGRAM_ID
+        .LOCK_CPMM_PROGRAM
+    : MAINNET_LOCK_CPMM_PROGRAM_ID;
+}
+
+function assertCorrectCpmmPoolProgram(
+  programId: string,
+) {
+  const actual =
+    new PublicKey(
+      programId,
+    );
+
+  const expected =
+    expectedCpmmProgramId();
+
+  if (!actual.equals(expected)) {
+    throw new Error(
+      `Refusing Fee Key claim: the CPMM pool belongs to ${actual.toBase58()}, but Kodiak expects ${expected.toBase58()} on ${NETWORK_LABEL}.`,
+    );
+  }
+}
+
+function assertCorrectLockProgram(
+  transaction: VersionedTransaction,
+) {
+  const expected =
+    expectedLockProgramId();
+
+  const includesExpectedProgram =
+    transaction.message.staticAccountKeys.some(
+      (key) =>
+        key.equals(
+          expected,
+        ),
+    );
+
+  if (!includesExpectedProgram) {
+    throw new Error(
+      `Refusing Fee Key claim: the Raydium transaction does not include the expected ${NETWORK_LABEL} Burn & Earn / LP Lock program ${expected.toBase58()}.`,
+    );
+  }
+}
 
 function signatureFrom(
   value: unknown,
@@ -661,6 +732,15 @@ export function ClaimCreatorRewards() {
           poolId,
         );
 
+      /*
+       * Do not trust a stored/API pool ID by itself. Confirm that the pool
+       * account belongs to the canonical CPMM program for Kodiak's active
+       * network before building any claim transaction.
+       */
+      assertCorrectCpmmPoolProgram(
+        poolInfo.programId,
+      );
+
       const lpFeeUi =
         position.info
           .positionInfo
@@ -681,6 +761,13 @@ export function ClaimCreatorRewards() {
         );
       }
 
+      /*
+       * Raydium's SDK uses its canonical production program IDs by default on
+       * Mainnet. Devnet is the exception and requires explicit replacement
+       * program/auth PDAs. After the SDK builds the V0 transaction, Kodiak
+       * independently verifies that the expected cluster's LP Lock program is
+       * actually present before simulation or wallet approval.
+       */
       const params = {
         poolInfo,
         poolKeys,
@@ -722,6 +809,21 @@ export function ClaimCreatorRewards() {
         await raydium.cpmm.harvestLockLp(
           params,
         );
+
+      if (
+        transaction instanceof
+        VersionedTransaction
+      ) {
+        assertCorrectLockProgram(
+          transaction,
+        );
+      } else if (
+        KODIAK_IS_MAINNET
+      ) {
+        throw new Error(
+          "Refusing Mainnet Fee Key claim because Kodiak could not verify the Raydium LP Lock program in the built transaction.",
+        );
+      }
 
       setStatus({
         kind: "working",

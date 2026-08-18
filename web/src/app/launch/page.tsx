@@ -32,7 +32,6 @@ type FormState = {
   website: string;
   discord: string;
   supply: string;
-  lpHandling: "burn" | "lock" | "keep";
 };
 
 type SimulationDiagnostic = {
@@ -65,7 +64,6 @@ const initialForm: FormState = {
   discord: "",
   initialBuySol: "0",
   supply: "1000000000",
-  lpHandling: "burn",
 };
 
 function Field({
@@ -255,10 +253,11 @@ export default function LaunchPage() {
   };
 
   const prepareLaunchTransaction = async () => {
-    if (!publicKey || !signAllTransactions) {
+    if (!publicKey || !signTransaction || !signAllTransactions) {
       setLaunchStatus({
         kind: "error",
-        message: "Connect a wallet before preparing the launch.",
+        message:
+          "Connect a wallet that supports both signTransaction and signAllTransactions before preparing the launch.",
       });
       return;
     }
@@ -355,7 +354,7 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "working",
-        message: "Building the Raydium LaunchLab transaction...",
+        message: "Loading Raydium LaunchLab configuration...",
       });
 
       const programId = KODIAK_LAUNCHPAD_PROGRAM_ID;
@@ -378,10 +377,11 @@ export default function LaunchPage() {
 
       const configInfo = LaunchpadConfig.decode(configAccount.data);
       const mintKeypair = Keypair.generate();
+
       const raydium = await loadKodiakRaydium({
         connection,
         owner: publicKey,
-        signTransaction: signTransaction!,
+        signTransaction,
         signAllTransactions,
       });
 
@@ -410,15 +410,24 @@ export default function LaunchPage() {
         return;
       }
 
-      const { transactions, execute } =
-        await raydium.launchpad.createLaunchpad({
+      /*
+       * Build helper:
+       *
+       * Kodiak builds once for simulation, then builds the exact same launch
+       * again with the SAME mint keypair immediately before wallet approval.
+       * This gives the wallet transaction a fresh Solana blockhash instead of
+       * reusing the older transaction objects that were built before the
+       * simulation round-trip.
+       */
+      const buildLaunch = () =>
+        raydium.launchpad.createLaunchpad({
           programId,
           mintA: mintKeypair.publicKey,
           decimals: 6,
           name: form.name.trim(),
           symbol: form.symbol.replace("$", "").trim().toUpperCase(),
           migrateType: "cpmm",
-          uri: metadataPayload.uri,
+          uri: metadataPayload.uri!,
           configId,
           configInfo,
           mintBDecimals: 9,
@@ -430,7 +439,16 @@ export default function LaunchPage() {
           extraSigners: [mintKeypair],
         });
 
-      transactionCount = transactions.length;
+      setLaunchStatus({
+        kind: "working",
+        message: "Building the Raydium LaunchLab transaction for simulation...",
+      });
+
+      const simulationBuild =
+        await buildLaunch();
+
+      transactionCount =
+        simulationBuild.transactions.length;
 
       setLaunchStatus({
         kind: "working",
@@ -439,8 +457,8 @@ export default function LaunchPage() {
         }...`,
       });
 
-      for (let index = 0; index < transactions.length; index += 1) {
-        const transaction = transactions[index];
+      for (let index = 0; index < simulationBuild.transactions.length; index += 1) {
+        const transaction = simulationBuild.transactions[index];
         const simulation =
           transaction instanceof VersionedTransaction
             ? await connection.simulateTransaction(transaction, {
@@ -479,16 +497,53 @@ export default function LaunchPage() {
         transactionCount,
         passedCount,
         checkedAt: new Date().toLocaleTimeString(),
-        walletHandoffStarted: true,
+        walletHandoffStarted: false,
       });
 
       setLaunchStatus({
         kind: "working",
         message:
-          "Kodiak simulation PASSED. The transaction is now being handed to Phantom for wallet approval.",
+          "Kodiak simulation PASSED. Rebuilding the launch with fresh Solana blockhashes before wallet approval...",
       });
 
-      const sent = await execute({ sequentially: true });
+      const freshBuild =
+        await buildLaunch();
+
+      if (
+        freshBuild.transactions.length !==
+        transactionCount
+      ) {
+        throw new Error(
+          `Raydium rebuilt the launch with ${freshBuild.transactions.length} transactions after Kodiak simulated ${transactionCount}. No wallet request was opened; please try again.`,
+        );
+      }
+
+      setSimulationDiagnostic((current) =>
+        current
+          ? {
+              ...current,
+              walletHandoffStarted: true,
+            }
+          : current,
+      );
+
+      setLaunchStatus({
+        kind: "working",
+        message:
+          "Fresh launch transaction built after simulation. Approve the transaction in your wallet.",
+      });
+
+      /*
+       * IMPORTANT:
+       * execute() comes from the SECOND build, not the simulation build.
+       * That avoids intentionally handing the wallet the older transaction
+       * objects whose blockhashes existed before simulation completed.
+       */
+      const sent =
+        await freshBuild.execute({
+          sequentially: true,
+        });
+
       const signatures: string[] = [];
 
       const collectSignatures = (value: unknown) => {
@@ -692,14 +747,14 @@ export default function LaunchPage() {
           transactionCount: current?.transactionCount ?? transactionCount,
           passedCount: current?.passedCount ?? passedCount,
           checkedAt: current?.checkedAt ?? new Date().toLocaleTimeString(),
-          walletHandoffStarted: true,
+          walletHandoffStarted: current?.walletHandoffStarted ?? false,
           walletError: walletOrLaunchError,
         }));
 
         setLaunchStatus({
           kind: "error",
           message:
-            `Kodiak simulation PASSED, but Phantom did not submit the transaction. Wallet response: ${walletOrLaunchError}`,
+            `Kodiak simulation PASSED, but the post-simulation launch did not complete. Wallet / transaction response: ${walletOrLaunchError}`,
           logs,
         });
         return;
@@ -930,38 +985,26 @@ export default function LaunchPage() {
                   onChange={(value) => update("supply", value.replace(/\D/g, ""))}
                 />
 
-                <div>
-                  <p className="mb-3 text-sm font-bold text-zinc-300">LP handling</p>
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    {(["burn", "lock", "keep"] as const).map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => update("lpHandling", option)}
-                        className={`rounded-2xl border px-4 py-4 text-left font-bold capitalize ${
-                          form.lpHandling === option
-                            ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
-                            : "border-white/10 bg-white/[0.03] text-zinc-400"
-                        }`}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
                 <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-5">
-                  <p className="font-black text-emerald-300">
-                    Post-migration creator Fee Key
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-emerald-300">
+                    Fixed migration policy
                   </p>
+
+                  <h3 className="mt-2 text-lg font-black">
+                    90% burned Â· 10% creator Fee Key
+                  </h3>
+
                   <p className="mt-2 text-sm leading-6 text-zinc-400">
-                    Kodiak&apos;s current PlatformConfig sends 10% of the migrated
-                    CPMM LP fee rights to the creator through Raydium&apos;s Fee Key
-                    NFT, while 90% of the migrated LP is permanently burned.
+                    When a Kodiak launch graduates to Raydium CPMM, 90% of the
+                    migrated LP ownership is permanently burned. The creator
+                    receives the 10% Fee Key share configured by Kodiak&apos;s
+                    on-chain PlatformConfig.
                   </p>
+
                   <p className="mt-2 text-xs leading-5 text-zinc-600">
-                    This is controlled by Kodiak&apos;s on-chain PlatformConfig and
-                    is not a Token-2022 transfer fee or a per-launch toggle.
+                    Creators cannot switch this to keep or withdraw the migrated
+                    liquidity on an individual launch. Kodiak&apos;s platform LP
+                    share is 0%.
                   </p>
                 </div>
 
@@ -984,13 +1027,13 @@ export default function LaunchPage() {
                     ["Name", form.name || "Not entered"],
                     ["Symbol", previewSymbol],
                     ["Supply", Number(form.supply || 0).toLocaleString()],
-                    ["LP handling", form.lpHandling],
+                    ["Migrated LP policy", "90% burned / 10% creator Fee Key"],
                     ["Bonding creator fee", "0.45%"],
-                    ["Post-migration creator Fee Key", "10% CPMM LP fee share"],
+                    ["Platform LP share", "0%"],
                   ].map(([label, value]) => (
                     <div key={label} className="flex justify-between gap-5 border-b border-white/5 pb-3 last:border-0 last:pb-0">
                       <span className="text-zinc-500">{label}</span>
-                      <span className="text-right font-bold capitalize">{value}</span>
+                      <span className="text-right font-bold">{value}</span>
                     </div>
                   ))}
                 </div>
@@ -1048,15 +1091,15 @@ export default function LaunchPage() {
 
                         {simulationDiagnostic.walletHandoffStarted && (
                           <p className="mt-2 text-xs leading-5 text-zinc-400">
-                            Wallet handoff started after the successful Kodiak
-                            simulation.
+                            A fresh post-simulation transaction was built before
+                            wallet handoff.
                           </p>
                         )}
 
                         {simulationDiagnostic.walletError && (
                           <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/[0.05] p-3">
                             <p className="text-xs font-black text-amber-300">
-                              Phantom / wallet response
+                              Wallet / transaction response
                             </p>
                             <p className="mt-1 break-words text-xs leading-5 text-zinc-300">
                               {simulationDiagnostic.walletError}

@@ -1144,7 +1144,7 @@ export default function LaunchPage() {
                   </p>
 
                   <h3 className="mt-2 text-lg font-black">
-                    90% burned Â· 10% creator Fee Key
+                    90% burned - 10% creator Fee Key
                   </h3>
 
                   <p className="mt-2 text-sm leading-6 text-zinc-400">

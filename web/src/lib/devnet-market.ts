@@ -67,15 +67,15 @@ const connection = new Connection(
 );
 
 function getLaunchpadProgramId() {
-  if (!KODIAK_IS_DEVNET) {
-    throw new Error(
-      "Kodiak Mainnet chart verification is not enabled yet. " +
-        "The network layer is Mainnet-aware, but the production Raydium " +
-        "LaunchLab program configuration must be verified before Mainnet " +
-        "trades can be indexed.",
-    );
-  }
-
+  /*
+   * KODIAK_LAUNCHPAD_PROGRAM_ID is network-aware:
+   * - Devnet -> Raydium LaunchLab Devnet program
+   * - Mainnet -> Raydium LaunchLab Mainnet program
+   *
+   * Mainnet remains protected by Kodiak's separate network enable gate.
+   * Once that gate is intentionally enabled, chart/trade verification must
+   * use the production LaunchLab program instead of refusing Mainnet reads.
+   */
   return KODIAK_LAUNCHPAD_PROGRAM_ID;
 }
 
@@ -462,10 +462,8 @@ export async function inferTokenAmount(
   side: "buy" | "sell" = "buy",
 ): Promise<InferredTrade> {
   /*
-   * The network guard intentionally happens before transaction lookup.
-   * Until Kodiak's production LaunchLab program configuration is verified,
-   * this prevents a Mainnet switch from indexing trades against Devnet
-   * bonding-curve assumptions.
+   * Resolve the network-aware LaunchLab program before transaction lookup.
+   * Devnet and Mainnet use their respective Raydium LaunchLab program IDs.
    */
   getLaunchpadProgramId();
 

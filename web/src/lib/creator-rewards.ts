@@ -280,7 +280,7 @@ export async function recordCreatorReward(
     successFundSol:
       solAmount *
       KODIAK_FEES.kodiakPlatformRate *
-      SUCCESS_SHARE,
+      KODIAK_FEES.creatorSuccessFundShareOfKodiakRevenue,
     timestamp:
       unix(
         Number(

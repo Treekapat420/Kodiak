@@ -16,6 +16,7 @@ import {
   KODIAK_NETWORK,
   KODIAK_RPC_URL,
 } from "@/lib/solana/network";
+import { KODIAK_FEES } from "@/lib/fees";
 import { getRedis } from "@/lib/server/redis";
 
 export const runtime = "nodejs";
@@ -57,7 +58,8 @@ const MAINNET_PLATFORM_ID =
 const CREATOR_SUCCESS_FUND_WALLET =
   "EJeXJ7Bf6nyJ2p4i7kR8Wyfdmi3JgpdU3iDRMCzZheWG";
 
-const CREATOR_SUCCESS_FUND_BPS = 500;
+const CREATOR_SUCCESS_FUND_BPS =
+  KODIAK_FEES.creatorSuccessFundShareBps;
 const BPS_DENOMINATOR = 10_000;
 
 function networkLabel() {
@@ -255,7 +257,7 @@ async function buildRevenueSummary() {
     claimedSol:
       solFromLamports(claimedLamports),
 
-    creatorSuccessFundPercent: 5,
+    creatorSuccessFundPercent: KODIAK_FEES.creatorSuccessFundPercent,
     creatorSuccessFundLamports:
       lifetimeSplit.creatorSuccessFundLamports,
     creatorSuccessFundSol:
@@ -574,7 +576,7 @@ export async function POST(
             claimedLamports,
           ),
 
-        creatorSuccessFundPercent: 5,
+        creatorSuccessFundPercent: KODIAK_FEES.creatorSuccessFundPercent,
         claimCreatorSuccessFundLamports:
           claimSplit.creatorSuccessFundLamports,
         claimCreatorSuccessFundSol:

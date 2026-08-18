@@ -59,10 +59,17 @@ function foundingWalletKey(wallet: string) {
 }
 
 function serverRpcUrl() {
+  /*
+   * Mainnet must never fall back through the generic SOLANA_RPC_URL.
+   * That variable may still point at Devnet from Kodiak's test setup.
+   *
+   * KODIAK_RPC_URL already fails closed when Mainnet is enabled without
+   * NEXT_PUBLIC_SOLANA_MAINNET_RPC_URL, so Mainnet verification is allowed
+   * to use only the dedicated server Mainnet RPC override or KODIAK_RPC_URL.
+   */
   if (KODIAK_IS_MAINNET) {
     return (
       process.env.SOLANA_MAINNET_RPC_URL?.trim() ||
-      process.env.SOLANA_RPC_URL?.trim() ||
       KODIAK_RPC_URL
     );
   }

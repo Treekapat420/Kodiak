@@ -9,7 +9,7 @@ import {
   LaunchpadConfig,
   TxVersion,
 } from "@raydium-io/raydium-sdk-v2";
-import { Keypair, PublicKey, VersionedTransaction } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
@@ -488,33 +488,22 @@ export default function LaunchPage() {
       for (let index = 0; index < simulationBuild.transactions.length; index += 1) {
         const transaction = simulationBuild.transactions[index];
 
-        const programIds =
-          transaction instanceof VersionedTransaction
-            ? transaction.message.compiledInstructions
-                .map((instruction) =>
-                  transaction.message.staticAccountKeys[
-                    instruction.programIdIndex
-                  ]?.toBase58(),
-                )
-                .filter((value): value is string => Boolean(value))
-            : transaction.instructions.map((instruction) =>
-                instruction.programId.toBase58(),
-              );
+        const programIds = transaction.message.compiledInstructions
+          .map((instruction) =>
+            transaction.message.staticAccountKeys[
+              instruction.programIdIndex
+            ]?.toBase58(),
+          )
+          .filter((value): value is string => Boolean(value));
 
         programIds.forEach((programId) =>
           diagnosticPrograms.add(programId),
         );
 
-        const feeResult =
-          transaction instanceof VersionedTransaction
-            ? await connection.getFeeForMessage(
-                transaction.message,
-                "confirmed",
-              )
-            : await connection.getFeeForMessage(
-                transaction.compileMessage(),
-                "confirmed",
-              );
+        const feeResult = await connection.getFeeForMessage(
+          transaction.message,
+          "confirmed",
+        );
 
         if (typeof feeResult.value === "number") {
           estimatedNetworkFeeLamports += feeResult.value;
@@ -525,18 +514,15 @@ export default function LaunchPage() {
           "confirmed",
         );
 
-        const simulation =
-          transaction instanceof VersionedTransaction
-            ? await connection.simulateTransaction(transaction, {
-                commitment: "confirmed",
-                replaceRecentBlockhash: true,
-                sigVerify: false,
-                accounts: {
-                  encoding: "base64",
-                  addresses: [publicKey.toBase58()],
-                },
-              })
-            : await connection.simulateTransaction(transaction);
+        const simulation = await connection.simulateTransaction(transaction, {
+          commitment: "confirmed",
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+          accounts: {
+            encoding: "base64",
+            addresses: [publicKey.toBase58()],
+          },
+        });
 
         const transactionLogs = simulation.value.logs ?? [];
         diagnosticLogs.push(

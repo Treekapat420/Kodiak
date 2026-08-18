@@ -1648,6 +1648,25 @@ export default function TradePage() {
               new BN(
                 lamports,
               ),
+
+            /*
+             * Phantom compatibility:
+             *
+             * Raydium's normal SOL-buy path creates a temporary wrapped-SOL
+             * account backed by an ephemeral Keypair. That makes the
+             * transaction require more than one signer, which is the exact
+             * condition Phantom warns can prevent reliable transaction
+             * simulation.
+             *
+             * fromCreate=true tells Raydium to use the wallet's associated
+             * wrapped-SOL account instead. The SDK creates it idempotently,
+             * transfers the exact SOL input into it, and syncs native SOL.
+             * That removes the temporary Keypair signer from the buy.
+             */
+            fromCreate:
+              true,
+            feePayer:
+              publicKey,
           });
         };
 
@@ -1739,6 +1758,18 @@ export default function TradePage() {
       if (!(freshBuild.transaction instanceof VersionedTransaction)) {
         throw new Error(
           "Kodiak expected a versioned bonding-curve buy transaction before wallet approval.",
+        );
+      }
+
+      /*
+       * A bonding-curve SOL buy must now be wallet-only signing.
+       * If Raydium ever changes its builder and reintroduces an ephemeral
+       * signer, stop here instead of sending Phantom a transaction it cannot
+       * reliably preview.
+       */
+      if (freshBuild.signers.length !== 0) {
+        throw new Error(
+          `Kodiak stopped the buy before wallet handoff because Raydium returned ${freshBuild.signers.length} additional signer(s). No transaction was sent to Phantom.`,
         );
       }
 

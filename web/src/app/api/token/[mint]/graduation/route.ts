@@ -19,6 +19,7 @@ import {
 import {
   KODIAK_IS_DEVNET,
   KODIAK_IS_MAINNET,
+  KODIAK_MAINNET_CPMM_CONFIG_ID,
   KODIAK_NETWORK,
   KODIAK_RPC_URL,
 } from "@/lib/solana/network";
@@ -32,11 +33,21 @@ type Context = {
   }>;
 };
 
+const DEVNET_PLATFORM_ID =
+  "D33yYxh4JRtdeyLq7sFD8MzSjdtUa3uNFsSk39QHY8yT";
+
+const MAINNET_PLATFORM_ID =
+  "5d63yX2vRpyS2BPFwJJB15tMmctWCKwiKychEjP3gy4W";
+
 function serverRpcUrl() {
+  /*
+   * Mainnet intentionally does NOT fall back through the generic
+   * SOLANA_RPC_URL variable. KODIAK_RPC_URL already fails closed when
+   * Mainnet is enabled without a dedicated Mainnet RPC.
+   */
   if (KODIAK_IS_MAINNET) {
     return (
       process.env.SOLANA_MAINNET_RPC_URL?.trim() ||
-      process.env.SOLANA_RPC_URL?.trim() ||
       KODIAK_RPC_URL
     );
   }
@@ -53,6 +64,25 @@ const connection =
     serverRpcUrl(),
     "confirmed",
   );
+
+function configuredPlatformId() {
+  const value =
+    KODIAK_IS_DEVNET
+      ? (
+          process.env.KODIAK_DEVNET_PLATFORM_ID?.trim() ||
+          process.env.NEXT_PUBLIC_KODIAK_DEVNET_PLATFORM_ID?.trim() ||
+          DEVNET_PLATFORM_ID
+        )
+      : (
+          process.env.KODIAK_MAINNET_PLATFORM_ID?.trim() ||
+          process.env.NEXT_PUBLIC_KODIAK_MAINNET_PLATFORM_ID?.trim() ||
+          MAINNET_PLATFORM_ID
+        );
+
+  return new PublicKey(
+    value,
+  );
+}
 
 function statusLabel(
   status: number,
@@ -149,7 +179,12 @@ async function findGraduatedCpmmPool({
         "confirmed",
       );
 
-    if (account) {
+    if (
+      account &&
+      account.owner.equals(
+        cpmmProgramId,
+      )
+    ) {
       return candidate;
     }
   }
@@ -203,10 +238,58 @@ export async function GET(
       );
     }
 
+    if (
+      !poolAccount.owner.equals(
+        KODIAK_LAUNCHPAD_PROGRAM_ID,
+      )
+    ) {
+      throw new Error(
+        "The derived LaunchLab pool account is not owned by the active Raydium LaunchLab program.",
+      );
+    }
+
     const poolInfo =
       LaunchpadPool.decode(
         poolAccount.data,
       );
+
+    const kodiakPlatformId =
+      configuredPlatformId();
+
+    if (
+      !poolInfo.platformId.equals(
+        kodiakPlatformId,
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This LaunchLab token does not belong to Kodiak's active PlatformConfig.",
+          network:
+            KODIAK_NETWORK,
+          mint:
+            mintA.toBase58(),
+          launchpadPoolId:
+            poolId.toBase58(),
+          platformId:
+            poolInfo.platformId.toBase58(),
+        },
+        {
+          status: 403,
+        },
+      );
+    }
+
+    const migrateType =
+      Number(
+        poolInfo.migrateType,
+      );
+
+    if (migrateType !== 1) {
+      throw new Error(
+        "This Kodiak launch is not configured to migrate to Raydium CPMM.",
+      );
+    }
 
     const rawStatus =
       Number(
@@ -247,25 +330,53 @@ export async function GET(
           "confirmed",
         );
 
-      if (platformAccount) {
-        const platformInfo =
-          PlatformConfig.decode(
-            platformAccount.data,
-          );
+      if (!platformAccount) {
+        throw new Error(
+          "Kodiak's LaunchLab PlatformConfig account was not found on the active network.",
+        );
+      }
 
-        cpConfigId =
-          platformInfo.cpConfigId;
+      if (
+        !platformAccount.owner.equals(
+          KODIAK_LAUNCHPAD_PROGRAM_ID,
+        )
+      ) {
+        throw new Error(
+          "Kodiak's PlatformConfig account is not owned by the active Raydium LaunchLab program.",
+        );
+      }
 
-        if (rawStatus === 1) {
-          cpmmPoolId =
-            await findGraduatedCpmmPool({
-              mintA:
-                poolInfo.mintA,
-              mintB:
-                poolInfo.mintB,
-              cpConfigId,
-            });
-        }
+      const platformInfo =
+        PlatformConfig.decode(
+          platformAccount.data,
+        );
+
+      cpConfigId =
+        platformInfo.cpConfigId;
+
+      /*
+       * Kodiak's verified Mainnet migration target is Raydium CPMM index 8.
+       * Fail closed if the live PlatformConfig ever points somewhere else.
+       */
+      if (
+        KODIAK_IS_MAINNET &&
+        cpConfigId.toBase58() !==
+          KODIAK_MAINNET_CPMM_CONFIG_ID
+      ) {
+        throw new Error(
+          "Kodiak's Mainnet PlatformConfig no longer points to the verified CPMM index 8 configuration. Graduation trading is locked until this is reviewed.",
+        );
+      }
+
+      if (rawStatus === 1) {
+        cpmmPoolId =
+          await findGraduatedCpmmPool({
+            mintA:
+              poolInfo.mintA,
+            mintB:
+              poolInfo.mintB,
+            cpConfigId,
+          });
       }
     }
 
@@ -283,11 +394,7 @@ export async function GET(
         state,
         rawStatus,
         migrateType:
-          Number(
-            poolInfo.migrateType,
-          ) === 1
-            ? "cpmm"
-            : "amm",
+          "cpmm",
         launchpadPoolId:
           poolId.toBase58(),
         platformId:

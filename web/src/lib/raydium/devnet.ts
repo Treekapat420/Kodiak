@@ -14,6 +14,7 @@ import type {
 import {
   KODIAK_IS_DEVNET,
   KODIAK_IS_MAINNET,
+  KODIAK_MAINNET_ENABLED,
   KODIAK_NETWORK,
 } from "@/lib/solana/network";
 
@@ -39,17 +40,24 @@ type LoadKodiakRaydiumParams = {
   signAllTransactions: SignAllTransactions;
 };
 
-const MAINNET_ENABLED =
-  process.env.NEXT_PUBLIC_KODIAK_MAINNET_ENABLED?.trim().toLowerCase() ===
-  "true";
-
 function assertKodiakRaydiumReady() {
-  if (KODIAK_IS_MAINNET && !MAINNET_ENABLED) {
+  /*
+   * Use the shared network module as Kodiak's single source of truth.
+   * network.ts already requires BOTH:
+   *
+   * NEXT_PUBLIC_SOLANA_NETWORK=mainnet
+   * NEXT_PUBLIC_KODIAK_MAINNET_ENABLED=true
+   *
+   * before KODIAK_IS_MAINNET can become true.
+   */
+  if (
+    KODIAK_IS_MAINNET &&
+    !KODIAK_MAINNET_ENABLED
+  ) {
     throw new Error(
       "Kodiak Mainnet transactions are still locked. " +
-        "Set NEXT_PUBLIC_KODIAK_MAINNET_ENABLED=true only after the " +
-        "Mainnet PlatformConfig, migration configuration, production RPC, " +
-        "admin wallets, and final end-to-end tests have been verified.",
+        "Enable Mainnet only after the PlatformConfig, CPMM migration target, " +
+        "production RPC, authority wallets, and final end-to-end checks are verified.",
     );
   }
 }
@@ -59,6 +67,10 @@ function raydiumUrlConfig() {
     return {};
   }
 
+  /*
+   * Raydium Devnet uses its dedicated API hosts.
+   * Mainnet intentionally falls through to the SDK's production defaults.
+   */
   return {
     urlConfigs: {
       ...DEV_API_URLS,
@@ -112,10 +124,14 @@ export async function loadKodiakRaydium({
     owner,
     signAllTransactions:
       walletFriendlySignAllTransactions,
-    cluster: KODIAK_NETWORK,
-    disableFeatureCheck: true,
-    disableLoadToken: true,
-    blockhashCommitment: "confirmed",
+    cluster:
+      KODIAK_NETWORK,
+    disableFeatureCheck:
+      true,
+    disableLoadToken:
+      true,
+    blockhashCommitment:
+      "confirmed",
     ...raydiumUrlConfig(),
   });
 }
@@ -123,11 +139,10 @@ export async function loadKodiakRaydium({
 /*
  * Compatibility exports:
  *
- * Existing Kodiak pages still import the old Devnet names. Keep these
- * aliases temporarily so we can migrate each caller safely and test after
- * every replacement instead of changing the entire application at once.
- *
- * Both aliases now route through the shared network-aware implementation.
+ * Older Kodiak files may still import the historical Devnet names.
+ * Keep these aliases until every caller has been migrated. They now route
+ * through the shared network-aware implementation, so they do not force
+ * Devnet behavior.
  */
 export const loadDevnetRaydium =
   loadKodiakRaydium;

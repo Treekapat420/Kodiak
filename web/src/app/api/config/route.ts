@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 
+import { KODIAK_FEES } from "@/lib/fees";
+
 import {
   KODIAK_IS_DEVNET,
   KODIAK_NETWORK,
@@ -86,18 +88,18 @@ function buildDefaultConfig() {
      * Display/accounting metadata for Kodiak's current LaunchLab fee model:
      * 0.25% Raydium base + 0.45% creator + 0.50% Kodiak = 1.20% total.
      */
-    tradingFeeBps: 120,
-    infrastructureFeeBps: 25,
-    regularCreatorFeeBps: 45,
-    regularKodiakFeeBps: 50,
+    tradingFeeBps: KODIAK_FEES.totalCurveBps,
+    infrastructureFeeBps: KODIAK_FEES.raydiumProtocolBps,
+    regularCreatorFeeBps: KODIAK_FEES.creatorCurveBps,
+    regularKodiakFeeBps: KODIAK_FEES.kodiakPlatformBps,
 
     // Founding Creator status is a program/badge benefit only.
     // It does not alter the on-chain LaunchLab fee split.
-    foundingCreatorFeeBps: 45,
-    foundingKodiakFeeBps: 50,
+    foundingCreatorFeeBps: KODIAK_FEES.creatorCurveBps,
+    foundingKodiakFeeBps: KODIAK_FEES.kodiakPlatformBps,
     foundingCreatorLimit: 100,
 
-    creatorSuccessFundPercentOfKodiakRevenue: 5,
+    creatorSuccessFundPercentOfKodiakRevenue: KODIAK_FEES.creatorSuccessFundPercent,
     foundingProgramEnabled: true,
     maintenanceMode: false,
   };
@@ -135,6 +137,23 @@ export async function GET() {
     return NextResponse.json({
       ...defaultConfig,
       ...stored,
+
+      // Fee metadata is code-defined and cannot be overwritten by stale Redis.
+      tradingFeeBps:
+        KODIAK_FEES.totalCurveBps,
+      infrastructureFeeBps:
+        KODIAK_FEES.raydiumProtocolBps,
+      regularCreatorFeeBps:
+        KODIAK_FEES.creatorCurveBps,
+      regularKodiakFeeBps:
+        KODIAK_FEES.kodiakPlatformBps,
+      foundingCreatorFeeBps:
+        KODIAK_FEES.creatorCurveBps,
+      foundingKodiakFeeBps:
+        KODIAK_FEES.kodiakPlatformBps,
+      creatorSuccessFundPercentOfKodiakRevenue:
+        KODIAK_FEES.creatorSuccessFundPercent,
+
       network:
         KODIAK_NETWORK,
       platformId:

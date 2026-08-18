@@ -1382,6 +1382,55 @@ export default function TradePage() {
     const instructionCount =
       transaction.message.compiledInstructions.length;
 
+    const instructionDetails =
+      transaction.message.compiledInstructions.map(
+        (instruction, index) => {
+          const programId =
+            transaction.message.staticAccountKeys[
+              instruction.programIdIndex
+            ]?.toBase58() ??
+            `lookup-index-${instruction.programIdIndex}`;
+
+          const accountIndexes =
+            Array.from(
+              instruction.accountKeyIndexes,
+            );
+
+          const dataPrefix =
+            Array.from(
+              instruction.data.slice(
+                0,
+                12,
+              ),
+            )
+              .map((byte) =>
+                byte
+                  .toString(16)
+                  .padStart(2, "0"),
+              )
+              .join("");
+
+          return {
+            index,
+            programId,
+            accountIndexes,
+            dataLength:
+              instruction.data.length,
+            dataPrefix,
+          };
+        },
+      );
+
+    const uniqueProgramIds =
+      Array.from(
+        new Set(
+          instructionDetails.map(
+            (instruction) =>
+              instruction.programId,
+          ),
+        ),
+      );
+
     const simulation = await connection.simulateTransaction(
       transaction,
       {
@@ -1391,12 +1440,27 @@ export default function TradePage() {
       },
     );
 
+    const programSummary =
+      uniqueProgramIds.join(", ");
+
+    const instructionSummary =
+      instructionDetails
+        .map(
+          (instruction) =>
+            `#${instruction.index + 1} ${instruction.programId} ` +
+            `accounts[${instruction.accountIndexes.join(",")}] ` +
+            `data=${instruction.dataLength}B:${instruction.dataPrefix}`,
+        )
+        .join(" | ");
+
     const summary =
       `${label}: ${serializedBytes} serialized bytes, ` +
       `${requiredSigners} required signer(s), ` +
       `${staticAccounts} static account(s), ` +
       `${instructionCount} instruction(s), ` +
-      `RPC simulation ${simulation.value.err ? "FAILED" : "PASSED"}.`;
+      `RPC simulation ${simulation.value.err ? "FAILED" : "PASSED"}. ` +
+      `Programs: ${programSummary}. ` +
+      `Instructions: ${instructionSummary}.`;
 
     console.info("[Kodiak transaction diagnostic]", {
       label,
@@ -1404,6 +1468,8 @@ export default function TradePage() {
       requiredSigners,
       staticAccounts,
       instructionCount,
+      uniqueProgramIds,
+      instructionDetails,
       simulationError: simulation.value.err,
       unitsConsumed: simulation.value.unitsConsumed ?? null,
       logs: simulation.value.logs ?? [],

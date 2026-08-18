@@ -26,6 +26,8 @@ import {
 } from "@/lib/raydium/devnet";
 import {
   KODIAK_IS_DEVNET,
+  KODIAK_IS_MAINNET,
+  KODIAK_NETWORK,
   kodiakNetworkLabel,
 } from "@/lib/solana/network";
 
@@ -91,6 +93,55 @@ type FundTransferRecordResponse =
   };
 
 const NETWORK_LABEL = kodiakNetworkLabel();
+
+const MAINNET_PLATFORM_CLAIM_FEE_WALLET =
+  process.env.NEXT_PUBLIC_KODIAK_PLATFORM_CLAIM_FEE_WALLET?.trim() ?? "";
+
+function validConfiguredPublicKey(
+  value: string,
+) {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    return (
+      new PublicKey(
+        value,
+      ).toBase58() ===
+      value
+    );
+  } catch {
+    return false;
+  }
+}
+
+function assertMainnetClaimWallet(
+  publicKey: PublicKey,
+) {
+  if (!KODIAK_IS_MAINNET) {
+    return;
+  }
+
+  if (
+    !validConfiguredPublicKey(
+      MAINNET_PLATFORM_CLAIM_FEE_WALLET,
+    )
+  ) {
+    throw new Error(
+      "Kodiak Mainnet platform fee-claim wallet is not configured.",
+    );
+  }
+
+  if (
+    publicKey.toBase58() !==
+    MAINNET_PLATFORM_CLAIM_FEE_WALLET
+  ) {
+    throw new Error(
+      "Connect Kodiak's configured Mainnet platform fee-claim wallet before claiming or transferring platform revenue.",
+    );
+  }
+}
 
 function signatureFrom(
   value: unknown,
@@ -238,6 +289,16 @@ export function ClaimPlatformRevenue() {
             throw new Error(
               config.error ??
                 `Unable to load Kodiak PlatformConfig (${response.status}).`,
+            );
+          }
+
+          if (
+            config.network &&
+            config.network !==
+              KODIAK_NETWORK
+          ) {
+            throw new Error(
+              `Kodiak config returned ${config.network}, but this client is running on ${KODIAK_NETWORK}.`,
             );
           }
 
@@ -435,6 +496,16 @@ export function ClaimPlatformRevenue() {
       );
     }
 
+    if (KODIAK_IS_DEVNET) {
+      throw new Error(
+        "Creator Success Fund treasury transfers are intentionally disabled on Devnet.",
+      );
+    }
+
+    assertMainnetClaimWallet(
+      publicKey,
+    );
+
     if (!signTransaction) {
       throw new Error(
         "This wallet does not expose signTransaction().",
@@ -460,7 +531,7 @@ export function ClaimPlatformRevenue() {
 
     const latestBlockhash =
       await connection.getLatestBlockhash(
-        "confirmed",
+        "finalized",
       );
 
     const transaction =
@@ -510,6 +581,20 @@ export function ClaimPlatformRevenue() {
       await signTransaction(
         transaction,
       );
+
+    const currentBlockHeight =
+      await connection.getBlockHeight(
+        "confirmed",
+      );
+
+    if (
+      currentBlockHeight >
+      latestBlockhash.lastValidBlockHeight
+    ) {
+      throw new Error(
+        "Wallet approval took too long and the Solana blockhash expired. No Creator Success Fund transfer was sent; try again and approve promptly.",
+      );
+    }
 
     const fundSignature =
       await connection.sendRawTransaction(
@@ -581,6 +666,30 @@ export function ClaimPlatformRevenue() {
       return;
     }
 
+    if (KODIAK_IS_DEVNET) {
+      setStatus({
+        kind: "error",
+        message:
+          "Creator Success Fund treasury transfers are intentionally disabled on Devnet.",
+      });
+      return;
+    }
+
+    try {
+      assertMainnetClaimWallet(
+        publicKey,
+      );
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "The connected Mainnet wallet is not authorized for platform revenue.",
+      });
+      return;
+    }
+
     if (
       pendingLamports <=
       0
@@ -635,6 +744,10 @@ export function ClaimPlatformRevenue() {
     }
 
     try {
+      assertMainnetClaimWallet(
+        publicKey,
+      );
+
       setStatus({
         kind: "working",
         message:
@@ -657,6 +770,16 @@ export function ClaimPlatformRevenue() {
         throw new Error(
           config.error ??
             `Unable to load Kodiak PlatformConfig (${response.status}).`,
+        );
+      }
+
+      if (
+        config.network &&
+        config.network !==
+          KODIAK_NETWORK
+      ) {
+        throw new Error(
+          `Kodiak config returned ${config.network}, but this client is running on ${KODIAK_NETWORK}.`,
         );
       }
 
@@ -699,7 +822,11 @@ export function ClaimPlatformRevenue() {
             mintB:
               NATIVE_MINT,
             claimFeeWallet:
-              publicKey,
+              KODIAK_IS_MAINNET
+                ? new PublicKey(
+                    MAINNET_PLATFORM_CLAIM_FEE_WALLET,
+                  )
+                : publicKey,
             txVersion:
               TxVersion.V0,
             feePayer:
@@ -942,6 +1069,39 @@ export function ClaimPlatformRevenue() {
                 SOL
               </p>
             ) : null}
+          </div>
+        ) : null}
+
+        {KODIAK_IS_MAINNET ? (
+          <div className="mt-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.05] px-4 py-3">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-emerald-300">
+              Mainnet Creator Success Fund
+            </p>
+
+            <p className="mt-1 text-xs leading-5 text-zinc-400">
+              Kodiak records 5% of verified platform revenue as a separate pending allocation. The transfer below requires its own wallet approval and sends only that pending amount to the dedicated Creator Success Fund wallet.
+            </p>
+
+            <p className="mt-2 break-all text-[11px] text-zinc-500">
+              Destination: {CREATOR_SUCCESS_FUND_WALLET.toBase58()}
+            </p>
+
+            <button
+              type="button"
+              disabled={
+                !connected ||
+                busy ||
+                pendingSol <= 0
+              }
+              onClick={() =>
+                void retryPendingSuccessFund()
+              }
+              className="mt-3 w-full rounded-xl bg-emerald-400 px-4 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {pendingSol > 0
+                ? `Transfer Pending 5% (${pendingSol.toFixed(9)} SOL)`
+                : "No Success Fund Transfer Pending"}
+            </button>
           </div>
         ) : null}
       </div>

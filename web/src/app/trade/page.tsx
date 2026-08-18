@@ -990,15 +990,15 @@ export default function TradePage() {
         `Fresh CPMM quote built after simulation. Approve the ${NETWORK_LABEL} buy in your wallet...`,
     });
 
-    const result =
-      await freshBuild.execute({
-        sendAndConfirm:
-          true,
-      });
+    if (!(freshBuild.transaction instanceof VersionedTransaction)) {
+      throw new Error(
+        "Kodiak expected a versioned CPMM buy transaction before wallet approval.",
+      );
+    }
 
     const signature =
-      collectSignature(
-        result,
+      await sendFreshWalletTransaction(
+        freshBuild.transaction,
       );
 
     if (!signature) {
@@ -1301,15 +1301,15 @@ export default function TradePage() {
         `Fresh CPMM quote built after simulation. Approve the ${NETWORK_LABEL} sell in your wallet...`,
     });
 
-    const result =
-      await freshBuild.execute({
-        sendAndConfirm:
-          true,
-      });
+    if (!(freshBuild.transaction instanceof VersionedTransaction)) {
+      throw new Error(
+        "Kodiak expected a versioned CPMM sell transaction before wallet approval.",
+      );
+    }
 
     const signature =
-      collectSignature(
-        result,
+      await sendFreshWalletTransaction(
+        freshBuild.transaction,
       );
 
     if (!signature) {
@@ -1367,6 +1367,64 @@ export default function TradePage() {
       signature,
     });
   }
+
+  const sendFreshWalletTransaction = async (
+    transaction: VersionedTransaction,
+  ): Promise<string> => {
+    if (!signTransaction) {
+      throw new Error(`Connect a wallet on ${NETWORK_LABEL} first.`);
+    }
+
+    /*
+     * Phantom-safe handoff:
+     *
+     * Raydium's execute() helper can add/sign/send internally before Phantom
+     * receives the request. Kodiak instead refreshes the blockhash at the last
+     * possible moment, clears any stale signatures, lets the connected wallet
+     * sign the exact transaction first, then broadcasts those signed bytes.
+     * This is the same handoff pattern used by Kodiak's working Mainnet launch.
+     */
+    const latestBlockhash =
+      await connection.getLatestBlockhash("confirmed");
+
+    transaction.message.recentBlockhash =
+      latestBlockhash.blockhash;
+
+    transaction.signatures =
+      transaction.signatures.map(() => new Uint8Array(64));
+
+    const walletSignedTransaction =
+      await signTransaction(transaction);
+
+    const signature =
+      await connection.sendRawTransaction(
+        walletSignedTransaction.serialize(),
+        {
+          skipPreflight: false,
+          maxRetries: 5,
+        },
+      );
+
+    const confirmation =
+      await connection.confirmTransaction(
+        {
+          signature,
+          blockhash: latestBlockhash.blockhash,
+          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+        },
+        "confirmed",
+      );
+
+    if (confirmation.value.err) {
+      throw new Error(
+        `The ${NETWORK_LABEL} transaction was submitted but failed on-chain: ${JSON.stringify(
+          confirmation.value.err,
+        )}`,
+      );
+    }
+
+    return signature;
+  };
 
   const buyToken = async () => {
     if (
@@ -1678,13 +1736,16 @@ export default function TradePage() {
           `Fresh curve quote built after simulation. Approve the ${NETWORK_LABEL} buy in your wallet...`,
       });
 
-      const result =
-        await freshBuild.execute({
-          sendAndConfirm:
-            true,
-        });
+      if (!(freshBuild.transaction instanceof VersionedTransaction)) {
+        throw new Error(
+          "Kodiak expected a versioned bonding-curve buy transaction before wallet approval.",
+        );
+      }
 
-      const signature = collectSignature(result);
+      const signature =
+        await sendFreshWalletTransaction(
+          freshBuild.transaction,
+        );
 
       if (!signature) {
         throw new Error(
@@ -2110,13 +2171,16 @@ export default function TradePage() {
           `Fresh curve quote built after simulation. Approve the ${NETWORK_LABEL} sell in your wallet...`,
       });
 
-      const result =
-        await freshBuild.execute({
-          sendAndConfirm:
-            true,
-        });
+      if (!(freshBuild.transaction instanceof VersionedTransaction)) {
+        throw new Error(
+          "Kodiak expected a versioned bonding-curve sell transaction before wallet approval.",
+        );
+      }
 
-      const signature = collectSignature(result);
+      const signature =
+        await sendFreshWalletTransaction(
+          freshBuild.transaction,
+        );
 
       if (!signature) {
         throw new Error(

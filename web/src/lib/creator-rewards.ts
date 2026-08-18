@@ -1,4 +1,5 @@
 import type { StoredTrade } from "@/lib/devnet-market";
+import { KODIAK_FEES } from "@/lib/fees";
 import {
   KODIAK_IS_DEVNET,
   KODIAK_NETWORK,
@@ -33,11 +34,6 @@ type LaunchRecord = {
   network?: string;
   createdAt?: string;
 };
-
-const CREATOR_RATE = 0.0045;
-const KODIAK_RATE = 0.005;
-const INFRA_RATE = 0.0025;
-const SUCCESS_SHARE = 0.05;
 
 function config() {
   const url =
@@ -274,16 +270,16 @@ export async function recordCreatorReward(
     solAmount,
     creatorRewardSol:
       solAmount *
-      CREATOR_RATE,
+      KODIAK_FEES.creatorCurveRate,
     kodiakFeeSol:
       solAmount *
-      KODIAK_RATE,
+      KODIAK_FEES.kodiakPlatformRate,
     infraFeeSol:
       solAmount *
-      INFRA_RATE,
+      KODIAK_FEES.raydiumProtocolRate,
     successFundSol:
       solAmount *
-      KODIAK_RATE *
+      KODIAK_FEES.kodiakPlatformRate *
       SUCCESS_SHARE,
     timestamp:
       unix(

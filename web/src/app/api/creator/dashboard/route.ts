@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { KODIAK_FEES } from "@/lib/fees";
 
 import {
   getCreatorLedger,
@@ -472,13 +473,13 @@ export async function GET(
         },
         feeModel: {
           creatorRate:
-            0.0045,
+            KODIAK_FEES.creatorCurveRate,
           kodiakRate:
-            0.005,
+            KODIAK_FEES.kodiakPlatformRate,
           infraRate:
-            0.0025,
+            KODIAK_FEES.raydiumProtocolRate,
           successFundShareOfKodiak:
-            0.05,
+            KODIAK_FEES.creatorSuccessFundShareOfKodiakRevenue,
           /*
            * This dashboard ledger is analytics/accounting only.
            * Actual creator claimability is determined separately by

@@ -1,7 +1,9 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import {
+  CREATE_CPMM_POOL_PROGRAM,
   Curve,
+  DEVNET_PROGRAM_ID,
   getPdaLaunchpadPoolId,
   LaunchpadConfig,
   LaunchpadPool,
@@ -32,10 +34,12 @@ export type StoredTrade = {
 
 type InferredTrade = {
   tokenAmount: number;
+  quoteAmountSol?: number;
   timestamp: number;
   openPriceSol?: number;
   closePriceSol?: number;
   slot?: number;
+  marketType?: "launchpad" | "cpmm";
 };
 
 type TokenBalance = {
@@ -47,9 +51,12 @@ type TokenBalance = {
 
 function serverRpcUrl() {
   if (KODIAK_IS_MAINNET) {
+    /*
+     * Do not allow a generic RPC variable to silently redirect Mainnet trade
+     * verification. network.ts already requires the dedicated Mainnet RPC.
+     */
     return (
       process.env.SOLANA_MAINNET_RPC_URL?.trim() ||
-      process.env.SOLANA_RPC_URL?.trim() ||
       KODIAK_RPC_URL
     );
   }
@@ -336,6 +343,201 @@ function findPoolTokenDelta(
   return best;
 }
 
+function transactionHasProgram(
+  parsed: Awaited<
+    ReturnType<
+      Connection["getParsedTransaction"]
+    >
+  >,
+  programId: PublicKey,
+) {
+  if (!parsed) {
+    return false;
+  }
+
+  return parsed.transaction.message.accountKeys.some(
+    (account) =>
+      account.pubkey.equals(
+        programId,
+      ),
+  );
+}
+
+function walletSignedTransaction(
+  parsed: NonNullable<
+    Awaited<
+      ReturnType<
+        Connection["getParsedTransaction"]
+      >
+    >
+  >,
+  wallet: PublicKey,
+) {
+  return parsed.transaction.message.accountKeys.some(
+    (account) =>
+      account.signer &&
+      account.pubkey.equals(
+        wallet,
+      ),
+  );
+}
+
+function findReserveDelta(
+  pre: TokenBalance[],
+  post: TokenBalance[],
+  mint: string,
+  direction: "increase" | "decrease",
+  excludedOwner?: string,
+) {
+  const indexes = new Set<number>();
+
+  for (const row of [...pre, ...post]) {
+    if (row.mint !== mint) {
+      continue;
+    }
+
+    if (
+      excludedOwner &&
+      row.owner ===
+        excludedOwner
+    ) {
+      continue;
+    }
+
+    indexes.add(
+      row.accountIndex,
+    );
+  }
+
+  let best:
+    | {
+        accountIndex: number;
+        before: number;
+        after: number;
+        delta: number;
+      }
+    | undefined;
+
+  for (const accountIndex of indexes) {
+    const next =
+      deltaForAccount(
+        pre,
+        post,
+        accountIndex,
+        mint,
+      );
+
+    const matches =
+      direction === "increase"
+        ? next.delta > 0
+        : next.delta < 0;
+
+    if (!matches) {
+      continue;
+    }
+
+    if (
+      !best ||
+      Math.abs(
+        next.delta,
+      ) >
+        Math.abs(
+          best.delta,
+        )
+    ) {
+      best = {
+        accountIndex,
+        ...next,
+      };
+    }
+  }
+
+  return best;
+}
+
+function cpmmPricesFromTransaction({
+  pre,
+  post,
+  mint,
+  owner,
+  side,
+}: {
+  pre: TokenBalance[];
+  post: TokenBalance[];
+  mint: string;
+  owner: string;
+  side: "buy" | "sell";
+}) {
+  const tokenReserve =
+    findReserveDelta(
+      pre,
+      post,
+      mint,
+      side === "buy"
+        ? "decrease"
+        : "increase",
+      owner,
+    );
+
+  const quoteReserve =
+    findReserveDelta(
+      pre,
+      post,
+      NATIVE_MINT.toBase58(),
+      side === "buy"
+        ? "increase"
+        : "decrease",
+      owner,
+    );
+
+  if (
+    !tokenReserve ||
+    !quoteReserve ||
+    tokenReserve.before <= 0 ||
+    tokenReserve.after <= 0 ||
+    quoteReserve.before <= 0 ||
+    quoteReserve.after <= 0
+  ) {
+    return {};
+  }
+
+  const openPriceSol =
+    quoteReserve.before /
+    tokenReserve.before;
+
+  const closePriceSol =
+    quoteReserve.after /
+    tokenReserve.after;
+
+  const quoteAmountSol =
+    Math.abs(
+      quoteReserve.delta,
+    );
+
+  if (
+    !Number.isFinite(
+      openPriceSol,
+    ) ||
+    !Number.isFinite(
+      closePriceSol,
+    ) ||
+    !Number.isFinite(
+      quoteAmountSol,
+    ) ||
+    openPriceSol <= 0 ||
+    closePriceSol <= 0 ||
+    quoteAmountSol <= 0
+  ) {
+    return {};
+  }
+
+  return {
+    openPriceSol,
+    closePriceSol,
+    quoteAmountSol,
+  };
+}
+
 async function readLaunchpadCurvePrices(
   mint: string,
   minContextSlot: number,
@@ -461,50 +663,108 @@ export async function inferTokenAmount(
   wallet: string,
   side: "buy" | "sell" = "buy",
 ): Promise<InferredTrade> {
-  /*
-   * Resolve the network-aware LaunchLab program before transaction lookup.
-   * Devnet and Mainnet use their respective Raydium LaunchLab program IDs.
-   */
-  getLaunchpadProgramId();
+  const launchpadProgramId =
+    getLaunchpadProgramId();
+
+  const cpmmProgramId =
+    KODIAK_IS_DEVNET
+      ? DEVNET_PROGRAM_ID
+          .CREATE_CPMM_POOL_PROGRAM
+      : CREATE_CPMM_POOL_PROGRAM;
 
   const parsed =
     await connection.getParsedTransaction(
       signature,
       {
-        commitment: "confirmed",
-        maxSupportedTransactionVersion: 0,
+        commitment:
+          "confirmed",
+        maxSupportedTransactionVersion:
+          0,
       },
     );
 
   if (!parsed) {
     return {
-      tokenAmount: 0,
+      tokenAmount:
+        0,
       timestamp:
-        Math.floor(Date.now() / 1000),
+        Math.floor(
+          Date.now() /
+            1000,
+        ),
     };
   }
 
   if (parsed.meta?.err) {
     return {
-      tokenAmount: 0,
+      tokenAmount:
+        0,
       timestamp:
         parsed.blockTime ??
-        Math.floor(Date.now() / 1000),
-      slot: parsed.slot,
+        Math.floor(
+          Date.now() /
+            1000,
+        ),
+      slot:
+        parsed.slot,
     };
   }
 
+  const ownerKey =
+    new PublicKey(
+      wallet,
+    );
+
   const owner =
-    new PublicKey(wallet).toBase58();
+    ownerKey.toBase58();
+
+  /*
+   * The API caller does not get to nominate an arbitrary wallet after the
+   * fact. The submitted wallet must actually be a signer of the confirmed
+   * transaction.
+   */
+  if (
+    !walletSignedTransaction(
+      parsed,
+      ownerKey,
+    )
+  ) {
+    throw new Error(
+      "The submitted wallet did not sign this transaction.",
+    );
+  }
+
+  const isLaunchpad =
+    transactionHasProgram(
+      parsed,
+      launchpadProgramId,
+    );
+
+  const isCpmm =
+    transactionHasProgram(
+      parsed,
+      cpmmProgramId,
+    );
+
+  if (
+    !isLaunchpad &&
+    !isCpmm
+  ) {
+    throw new Error(
+      "The transaction does not invoke Kodiak's active Raydium LaunchLab or CPMM program.",
+    );
+  }
 
   const pre =
     collectBalances(
-      parsed.meta?.preTokenBalances,
+      parsed.meta
+        ?.preTokenBalances,
     );
 
   const post =
     collectBalances(
-      parsed.meta?.postTokenBalances,
+      parsed.meta
+        ?.postTokenBalances,
     );
 
   const ownerDelta =
@@ -522,6 +782,10 @@ export async function inferTokenAmount(
         : ownerDelta.delta < 0
       : false;
 
+  /*
+   * Prefer the wallet's own token delta. A pool-vault fallback is retained
+   * for transactions where parsed owner metadata has not propagated yet.
+   */
   const poolDelta =
     findPoolTokenDelta(
       pre,
@@ -533,32 +797,72 @@ export async function inferTokenAmount(
   const tokenAmount =
     Math.abs(
       ownerDirectionMatches
-        ? ownerDelta?.delta ?? 0
-        : poolDelta?.delta ?? 0,
+        ? ownerDelta?.delta ??
+            0
+        : poolDelta?.delta ??
+            0,
     );
 
   if (
-    !Number.isFinite(tokenAmount) ||
+    !Number.isFinite(
+      tokenAmount,
+    ) ||
     tokenAmount <= 0
   ) {
     return {
-      tokenAmount: 0,
+      tokenAmount:
+        0,
       timestamp:
         parsed.blockTime ??
-        Math.floor(Date.now() / 1000),
-      slot: parsed.slot,
+        Math.floor(
+          Date.now() /
+            1000,
+        ),
+      slot:
+        parsed.slot,
+    };
+  }
+
+  if (isCpmm) {
+    /*
+     * CPMM is a constant-product pool with real token reserves, so the
+     * transaction's pre/post pool-vault balances are the authoritative spot
+     * prices for this candle. This is intentionally different from LaunchLab,
+     * whose virtual reserves must be decoded from LaunchpadPool state.
+     */
+    const cpmm =
+      cpmmPricesFromTransaction({
+        pre,
+        post,
+        mint,
+        owner,
+        side,
+      });
+
+    return {
+      tokenAmount,
+      quoteAmountSol:
+        cpmm.quoteAmountSol,
+      timestamp:
+        parsed.blockTime ??
+        Math.floor(
+          Date.now() /
+            1000,
+        ),
+      openPriceSol:
+        cpmm.openPriceSol,
+      closePriceSol:
+        cpmm.closePriceSol,
+      slot:
+        parsed.slot,
+      marketType:
+        "cpmm",
     };
   }
 
   /*
-   * IMPORTANT:
-   * Do not calculate chart prices from ordinary SPL-token vault balances.
-   * LaunchLab pricing uses virtual reserves, so a WSOL/token account ratio
-   * is not the bonding-curve spot price.
-   *
-   * Read Raydium's actual decoded LaunchpadPool instead. minContextSlot
-   * prevents this server from accepting pool state older than the confirmed
-   * trade transaction.
+   * LaunchLab uses virtual reserves. Never derive its OHLC from ordinary SPL
+   * vault ratios; read the decoded on-chain curve after the confirmed trade.
    */
   const curvePrices =
     await readLaunchpadCurvePrices(
@@ -566,16 +870,51 @@ export async function inferTokenAmount(
       parsed.slot,
     );
 
+  /*
+   * Use the quote-side reserve delta as server-verified volume. This prevents
+   * clients from inflating chart volume / analytics by posting an arbitrary
+   * solAmount alongside a real tiny trade signature.
+   */
+  const quoteReserve =
+    findReserveDelta(
+      pre,
+      post,
+      NATIVE_MINT.toBase58(),
+      side === "buy"
+        ? "increase"
+        : "decrease",
+      owner,
+    );
+
+  const quoteAmountSol =
+    Math.abs(
+      quoteReserve?.delta ??
+        0,
+    );
+
   return {
     tokenAmount,
+    quoteAmountSol:
+      Number.isFinite(
+        quoteAmountSol,
+      ) &&
+      quoteAmountSol > 0
+        ? quoteAmountSol
+        : undefined,
     timestamp:
       parsed.blockTime ??
-      Math.floor(Date.now() / 1000),
+      Math.floor(
+        Date.now() /
+          1000,
+      ),
     openPriceSol:
       curvePrices.openPriceSol,
     closePriceSol:
       curvePrices.closePriceSol,
-    slot: parsed.slot,
+    slot:
+      parsed.slot,
+    marketType:
+      "launchpad",
   };
 }
 

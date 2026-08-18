@@ -1419,11 +1419,9 @@ export default function TradePage() {
       );
     }
 
-    setTradeStatus({
-      kind: "working",
-      message:
-        `${summary} Opening Phantom with this exact transaction...`,
-    });
+    console.info(
+      `[Kodiak transaction diagnostic] ${summary} Opening Phantom with this exact transaction...`,
+    );
 
     return {
       serializedBytes,

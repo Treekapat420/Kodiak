@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import BN from "bn.js";
 import {
   CurveCalculator,
@@ -257,6 +257,8 @@ export default function TradePage() {
     message:
       `Load the last Kodiak launch or paste a ${NETWORK_LABEL} mint.`,
   });
+
+  const transactionDiagnosticRef = useRef("");
 
   const normalizedMint = mintText.trim();
 
@@ -1407,6 +1409,8 @@ export default function TradePage() {
       logs: simulation.value.logs ?? [],
     });
 
+    transactionDiagnosticRef.current = summary;
+
     if (serializedBytes >= 1232) {
       throw new Error(
         `${summary} Kodiak stopped before wallet handoff because the transaction meets or exceeds Solana's 1,232-byte serialized transaction limit.`,
@@ -1631,6 +1635,7 @@ export default function TradePage() {
     }
 
     try {
+      transactionDiagnosticRef.current = "";
       setEstimatedTokens(null);
 
       setStatus({
@@ -1874,12 +1879,17 @@ export default function TradePage() {
         signature,
       });
     } catch (error) {
+      const baseMessage =
+        error instanceof Error
+          ? error.message
+          : `The ${NETWORK_LABEL} purchase failed.`;
+
       setStatus({
         kind: "error",
         message:
-          error instanceof Error
-            ? error.message
-            : `The ${NETWORK_LABEL} purchase failed.`,
+          transactionDiagnosticRef.current
+            ? `${baseMessage} | ${transactionDiagnosticRef.current}`
+            : baseMessage,
         logs: extractLogs(error),
       });
     }

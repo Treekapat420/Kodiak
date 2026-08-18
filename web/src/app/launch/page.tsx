@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { KODIAK_FEE_LABELS } from "@/lib/fees";
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import BN from "bn.js";
 import {
@@ -991,7 +992,7 @@ export default function LaunchPage() {
                   </p>
 
                   <h3 className="mt-2 text-lg font-black">
-                    90% burned Â· 10% creator Fee Key
+                    90% burned ÃÂ· 10% creator Fee Key
                   </h3>
 
                   <p className="mt-2 text-sm leading-6 text-zinc-400">
@@ -1028,7 +1029,7 @@ export default function LaunchPage() {
                     ["Symbol", previewSymbol],
                     ["Supply", Number(form.supply || 0).toLocaleString()],
                     ["Migrated LP policy", "90% burned / 10% creator Fee Key"],
-                    ["Bonding creator fee", "0.45%"],
+                    ["Bonding creator fee", KODIAK_FEE_LABELS.creatorCurve],
                     ["Platform LP share", "0%"],
                   ].map(([label, value]) => (
                     <div key={label} className="flex justify-between gap-5 border-b border-white/5 pb-3 last:border-0 last:pb-0">

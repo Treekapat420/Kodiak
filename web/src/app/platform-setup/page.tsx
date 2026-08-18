@@ -11,7 +11,7 @@ import {
 } from "@solana/web3.js";
 import {
   LAUNCHPAD_PROGRAM,
-  Raydium,
+  PlatformConfig,
   TxVersion,
 } from "@raydium-io/raydium-sdk-v2";
 import {
@@ -20,6 +20,7 @@ import {
 } from "@solana/wallet-adapter-react";
 
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
+import { KODIAK_FEE_LABELS } from "@/lib/fees";
 import {
   KODIAK_LAUNCHPAD_PROGRAM_ID,
   loadKodiakRaydium,
@@ -29,6 +30,7 @@ import {
   KODIAK_IS_MAINNET,
   KODIAK_MAINNET_CPMM_CONFIG_ID,
   KODIAK_MAINNET_REQUESTED_BUT_LOCKED,
+  kodiakExplorerAddressUrl,
   kodiakExplorerTransactionUrl,
   kodiakNetworkLabel,
 } from "@/lib/solana/network";
@@ -54,11 +56,16 @@ type SetupStatus =
       logs?: string[];
     };
 
-type PlatformAuthorities = {
-  platformAdmin: PublicKey;
-  platformClaimFeeWallet: PublicKey;
-  platformLockNftWallet: PublicKey;
-  transferFeeExtensionAuth: PublicKey;
+type MainnetVerification = {
+  checked: boolean;
+  accountExists: boolean;
+  ownerMatchesLaunchLab: boolean;
+  cpmmMatches: boolean;
+  platformFeeMatches: boolean;
+  creatorFeeMatches: boolean;
+  actualCpmmConfig: string | null;
+  actualPlatformFeeRate: string | null;
+  actualCreatorFeeRate: string | null;
 };
 
 const PLATFORM_FEE_RATE = 5_000;
@@ -66,6 +73,9 @@ const CREATOR_FEE_RATE = 4_500;
 const PLATFORM_LP_SCALE = 0;
 const CREATOR_LP_SCALE = 100_000;
 const BURN_LP_SCALE = 900_000;
+
+const MAINNET_PLATFORM_ID =
+  "5d63yX2vRpyS2BPFwJJB15tMmctWCKwiKychEjP3gy4W";
 
 const NETWORK_LABEL = kodiakNetworkLabel();
 
@@ -113,31 +123,28 @@ const MAINNET_AUTHORITY_CONFIG_READY =
 const MAINNET_CPMM_CONFIG_READY =
   validConfiguredPublicKey(KODIAK_MAINNET_CPMM_CONFIG_ID);
 
-function getMainnetAuthorities(): PlatformAuthorities {
-  if (!MAINNET_AUTHORITY_CONFIG_READY) {
-    throw new Error(
-      "Kodiak Mainnet authority configuration is incomplete.",
-    );
+function bnLikeToString(value: unknown) {
+  if (
+    value &&
+    typeof value === "object" &&
+    "toString" in value &&
+    typeof value.toString === "function"
+  ) {
+    return value.toString();
   }
 
-  return {
-    platformAdmin: new PublicKey(
-      MAINNET_PLATFORM_ADMIN_WALLET,
-    ),
-    platformClaimFeeWallet: new PublicKey(
-      MAINNET_PLATFORM_CLAIM_FEE_WALLET,
-    ),
-    platformLockNftWallet: new PublicKey(
-      MAINNET_PLATFORM_LOCK_NFT_WALLET,
-    ),
-    transferFeeExtensionAuth: new PublicKey(
-      MAINNET_TRANSFER_FEE_AUTH_WALLET,
-    ),
-  };
+  return null;
 }
 
 export default function PlatformSetupPage() {
   const { connection } = useConnection();
+
+  const {
+    connected,
+    publicKey,
+    signTransaction,
+    signAllTransactions,
+  } = useWallet();
 
   const mainnetSetupConnection =
     MAINNET_SETUP_READY
@@ -147,21 +154,8 @@ export default function PlatformSetupPage() {
         )
       : null;
 
-  const activeSetupConnection =
-    mainnetSetupConnection ??
-    connection;
-
   const isolatedMainnetSetup =
-    Boolean(
-      mainnetSetupConnection,
-    );
-
-  const {
-    connected,
-    publicKey,
-    signTransaction,
-    signAllTransactions,
-  } = useWallet();
+    Boolean(mainnetSetupConnection);
 
   const [
     cpConfigId,
@@ -184,29 +178,206 @@ export default function PlatformSetupPage() {
   ] = useState<number | null>(null);
 
   const [
+    verification,
+    setVerification,
+  ] = useState<MainnetVerification | null>(null);
+
+  const [
     status,
     setStatus,
   ] = useState<SetupStatus>({
     kind: "idle",
     message: KODIAK_MAINNET_REQUESTED_BUT_LOCKED
-      ? "Mainnet is requested, but Kodiak is safely locked to Devnet until the explicit Mainnet enable flag is turned on."
+      ? "Mainnet is requested, but Kodiak remains safely locked to Devnet. This page is verification-only for the existing Mainnet PlatformConfig."
       : KODIAK_IS_DEVNET
         ? "Ready for Devnet configuration."
-        : "Mainnet Platform Setup is locked until Kodiak's production configuration is intentionally prepared.",
+        : "Kodiak Mainnet is enabled. PlatformConfig creation is permanently disabled on this page.",
   });
+
+  async function verifyExistingMainnetPlatform() {
+    if (!mainnetSetupConnection) {
+      setVerification(null);
+
+      setStatus({
+        kind: "error",
+        message:
+          "Kodiak's isolated Mainnet verification RPC is not available.",
+      });
+
+      return;
+    }
+
+    try {
+      setStatus({
+        kind: "working",
+        message:
+          "Reading Kodiak's existing Mainnet PlatformConfig directly from Solana...",
+      });
+
+      const platformId =
+        new PublicKey(
+          MAINNET_PLATFORM_ID,
+        );
+
+      const account =
+        await mainnetSetupConnection.getAccountInfo(
+          platformId,
+          "confirmed",
+        );
+
+      if (!account) {
+        setVerification({
+          checked: true,
+          accountExists: false,
+          ownerMatchesLaunchLab: false,
+          cpmmMatches: false,
+          platformFeeMatches: false,
+          creatorFeeMatches: false,
+          actualCpmmConfig: null,
+          actualPlatformFeeRate: null,
+          actualCreatorFeeRate: null,
+        });
+
+        setStatus({
+          kind: "error",
+          message:
+            "Kodiak's expected Mainnet PlatformConfig account was not found. Mainnet must remain locked.",
+        });
+
+        return;
+      }
+
+      const ownerMatchesLaunchLab =
+        account.owner.equals(
+          LAUNCHPAD_PROGRAM,
+        );
+
+      const decoded =
+        PlatformConfig.decode(
+          account.data,
+        ) as unknown as {
+          cpConfigId?: PublicKey;
+          feeRate?: unknown;
+          creatorFeeRate?: unknown;
+        };
+
+      const actualCpmmConfig =
+        decoded.cpConfigId instanceof PublicKey
+          ? decoded.cpConfigId.toBase58()
+          : null;
+
+      const actualPlatformFeeRate =
+        bnLikeToString(
+          decoded.feeRate,
+        );
+
+      const actualCreatorFeeRate =
+        bnLikeToString(
+          decoded.creatorFeeRate,
+        );
+
+      const cpmmMatches =
+        actualCpmmConfig ===
+        KODIAK_MAINNET_CPMM_CONFIG_ID;
+
+      const platformFeeMatches =
+        actualPlatformFeeRate ===
+        String(
+          PLATFORM_FEE_RATE,
+        );
+
+      const creatorFeeMatches =
+        actualCreatorFeeRate ===
+        String(
+          CREATOR_FEE_RATE,
+        );
+
+      const nextVerification: MainnetVerification = {
+        checked: true,
+        accountExists: true,
+        ownerMatchesLaunchLab,
+        cpmmMatches,
+        platformFeeMatches,
+        creatorFeeMatches,
+        actualCpmmConfig,
+        actualPlatformFeeRate,
+        actualCreatorFeeRate,
+      };
+
+      setVerification(
+        nextVerification,
+      );
+
+      const verified =
+        ownerMatchesLaunchLab &&
+        cpmmMatches &&
+        platformFeeMatches &&
+        creatorFeeMatches;
+
+      if (!verified) {
+        setStatus({
+          kind: "error",
+          message:
+            "Kodiak's Mainnet PlatformConfig exists, but one or more critical on-chain values do not match the production configuration. Mainnet must remain locked.",
+        });
+
+        return;
+      }
+
+      setStatus({
+        kind: "success",
+        message:
+          "Existing Kodiak Mainnet PlatformConfig verified on-chain. CPMM index and fee settings match the production configuration. No Mainnet setup transaction is available from this page.",
+        platformId:
+          platformId.toBase58(),
+      });
+    } catch (error) {
+      setVerification(null);
+
+      setStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unable to verify Kodiak's existing Mainnet PlatformConfig.",
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (!isolatedMainnetSetup) {
+      return;
+    }
+
+    const timer =
+      window.setTimeout(
+        () => {
+          void verifyExistingMainnetPlatform();
+        },
+        0,
+      );
+
+    return () =>
+      window.clearTimeout(
+        timer,
+      );
+  }, [isolatedMainnetSetup]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadBalance() {
-      if (!publicKey) {
+      if (
+        !publicKey ||
+        isolatedMainnetSetup
+      ) {
         setNetworkBalance(null);
         return;
       }
 
       try {
         const lamports =
-          await activeSetupConnection.getBalance(
+          await connection.getBalance(
             publicKey,
             "confirmed",
           );
@@ -232,7 +403,8 @@ export default function PlatformSetupPage() {
       cancelled = true;
     };
   }, [
-    activeSetupConnection,
+    connection,
+    isolatedMainnetSetup,
     publicKey,
   ]);
 
@@ -240,33 +412,18 @@ export default function PlatformSetupPage() {
     let cancelled = false;
 
     async function loadConfigs() {
-      if (isolatedMainnetSetup) {
+      /*
+       * Mainnet is verification-only. The existing Mainnet PlatformConfig
+       * already exists and must never be recreated from this page.
+       */
+      if (
+        isolatedMainnetSetup ||
+        KODIAK_IS_MAINNET
+      ) {
         setConfigOptions([]);
         setCpConfigId(
           KODIAK_MAINNET_CPMM_CONFIG_ID,
         );
-
-        setStatus({
-          kind: "idle",
-          message:
-            "Isolated Mainnet PlatformConfig setup is armed. The rest of Kodiak remains on Devnet.",
-        });
-
-        return;
-      }
-
-      if (KODIAK_IS_MAINNET) {
-        setConfigOptions([]);
-        setCpConfigId(
-          KODIAK_MAINNET_CPMM_CONFIG_ID,
-        );
-
-        setStatus({
-          kind: "idle",
-          message:
-            "Kodiak's verified Mainnet CPMM configuration is loaded, but Mainnet PlatformConfig creation remains locked.",
-        });
-
         return;
       }
 
@@ -337,15 +494,9 @@ export default function PlatformSetupPage() {
       false;
   }
 
-  const signerMatchesMainnetAdmin =
-    Boolean(publicKey) &&
-    validConfiguredPublicKey(
-      MAINNET_PLATFORM_ADMIN_WALLET,
-    ) &&
-    publicKey?.toBase58() ===
-      MAINNET_PLATFORM_ADMIN_WALLET;
-
-  const commonCreateRequirements =
+  const canCreateDevnet =
+    KODIAK_IS_DEVNET &&
+    !isolatedMainnetSetup &&
     connected &&
     Boolean(publicKey) &&
     Boolean(signTransaction) &&
@@ -355,129 +506,36 @@ export default function PlatformSetupPage() {
     status.kind !==
       "working";
 
-  const canCreateDevnet =
-    KODIAK_IS_DEVNET &&
-    !isolatedMainnetSetup &&
-    commonCreateRequirements;
-
-  const canCreateIsolatedMainnet =
-    isolatedMainnetSetup &&
-    MAINNET_AUTHORITY_CONFIG_READY &&
-    MAINNET_CPMM_CONFIG_READY &&
-    signerMatchesMainnetAdmin &&
-    commonCreateRequirements;
-
-  const canCreate =
-    canCreateDevnet ||
-    canCreateIsolatedMainnet;
-
-  async function createPlatform() {
+  async function createDevnetPlatform() {
     if (
       !publicKey ||
       !signTransaction ||
       !signAllTransactions ||
-      !canCreate
+      !canCreateDevnet
     ) {
       return;
     }
 
-    const targetIsMainnet =
-      isolatedMainnetSetup;
-
-    const targetLabel =
-      targetIsMainnet
-        ? "Mainnet"
-        : "Devnet";
-
-    setStatus({
-      kind: "working",
-      message:
-        `Building Kodiak PlatformConfig on Solana ${targetLabel}...`,
-    });
-
     try {
+      setStatus({
+        kind: "working",
+        message:
+          "Building Kodiak PlatformConfig on Solana Devnet...",
+      });
+
       const cpConfig =
-        targetIsMainnet
-          ? new PublicKey(
-              KODIAK_MAINNET_CPMM_CONFIG_ID,
-            )
-          : new PublicKey(
-              cpConfigId,
-            );
-
-      const authorities:
-        PlatformAuthorities =
-        targetIsMainnet
-          ? getMainnetAuthorities()
-          : {
-              platformAdmin:
-                publicKey,
-              platformClaimFeeWallet:
-                publicKey,
-              platformLockNftWallet:
-                publicKey,
-              transferFeeExtensionAuth:
-                publicKey,
-            };
-
-      /*
-       * When Mainnet is eventually unlocked, the connected transaction
-       * signer must be Kodiak's configured platform admin.
-       */
-      if (
-        targetIsMainnet &&
-        !publicKey.equals(
-          authorities.platformAdmin,
-        )
-      ) {
-        throw new Error(
-          "Connect the configured Kodiak Mainnet platform-admin wallet before creating the PlatformConfig.",
+        new PublicKey(
+          cpConfigId,
         );
-      }
 
       const raydium =
-        targetIsMainnet
-          ? await Raydium.load({
-              connection:
-                activeSetupConnection,
-              owner:
-                publicKey,
-              signAllTransactions:
-                async (
-                  transactions,
-                ) => {
-                  if (
-                    transactions.length ===
-                    1
-                  ) {
-                    return [
-                      await signTransaction(
-                        transactions[0],
-                      ),
-                    ];
-                  }
-
-                  return signAllTransactions(
-                    transactions,
-                  );
-                },
-              cluster:
-                "mainnet",
-              disableFeatureCheck:
-                true,
-              disableLoadToken:
-                true,
-              blockhashCommitment:
-                "confirmed",
-            })
-          : await loadKodiakRaydium({
-              connection:
-                activeSetupConnection,
-              owner:
-                publicKey,
-              signTransaction,
-              signAllTransactions,
-            });
+        await loadKodiakRaydium({
+          connection,
+          owner:
+            publicKey,
+          signTransaction,
+          signAllTransactions,
+        });
 
       const {
         transaction,
@@ -487,21 +545,19 @@ export default function PlatformSetupPage() {
         await raydium.launchpad.createPlatformConfig(
           {
             programId:
-              targetIsMainnet
-                ? LAUNCHPAD_PROGRAM
-                : KODIAK_LAUNCHPAD_PROGRAM_ID,
+              KODIAK_LAUNCHPAD_PROGRAM_ID,
             platformAdmin:
-              authorities.platformAdmin,
+              publicKey,
             platformClaimFeeWallet:
-              authorities.platformClaimFeeWallet,
+              publicKey,
             platformLockNftWallet:
-              authorities.platformLockNftWallet,
+              publicKey,
             platformVestingWallet:
               PublicKey.default,
             cpConfigId:
               cpConfig,
             transferFeeExtensionAuth:
-              authorities.transferFeeExtensionAuth,
+              publicKey,
             creatorFeeRate:
               new BN(
                 CREATOR_FEE_RATE,
@@ -540,13 +596,13 @@ export default function PlatformSetupPage() {
       setStatus({
         kind: "working",
         message:
-          `Simulating the ${targetLabel} transaction before opening your wallet...`,
+          "Simulating the Devnet transaction before opening your wallet...",
       });
 
       const simulation =
         transaction instanceof
         VersionedTransaction
-          ? await activeSetupConnection.simulateTransaction(
+          ? await connection.simulateTransaction(
               transaction,
               {
                 commitment:
@@ -557,7 +613,7 @@ export default function PlatformSetupPage() {
                   false,
               },
             )
-          : await activeSetupConnection.simulateTransaction(
+          : await connection.simulateTransaction(
               transaction,
             );
 
@@ -568,18 +624,12 @@ export default function PlatformSetupPage() {
       if (
         simulation.value.err
       ) {
-        const errorDetails =
-          typeof simulation.value.err ===
-          "string"
-            ? simulation.value.err
-            : JSON.stringify(
-                simulation.value.err,
-              );
-
         setStatus({
           kind: "error",
           message:
-            `${targetLabel} simulation failed: ${errorDetails}`,
+            `Devnet simulation failed: ${JSON.stringify(
+              simulation.value.err,
+            )}`,
           logs:
             simulationLogs,
         });
@@ -590,7 +640,7 @@ export default function PlatformSetupPage() {
       setStatus({
         kind: "working",
         message:
-          `Simulation passed. Approve the ${targetLabel} transaction in your wallet...`,
+          "Simulation passed. Approve the Devnet transaction in your wallet...",
       });
 
       const result =
@@ -603,9 +653,7 @@ export default function PlatformSetupPage() {
         extInfo.platformId.toBase58();
 
       window.localStorage.setItem(
-        targetIsMainnet
-          ? "kodiak-mainnet-platform-id"
-          : "kodiak-devnet-platform-id",
+        "kodiak-devnet-platform-id",
         platformId,
       );
 
@@ -627,16 +675,11 @@ export default function PlatformSetupPage() {
       setStatus({
         kind: "success",
         message:
-          `Kodiak ${targetLabel} PlatformConfig created.`,
+          "Kodiak Devnet PlatformConfig created.",
         platformId,
         signature,
       });
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Platform creation failed.";
-
       const possibleLogs =
         typeof error ===
           "object" &&
@@ -657,19 +700,23 @@ export default function PlatformSetupPage() {
       setStatus({
         kind: "error",
         message:
-          message.includes(
-            "already",
-          ) ||
-          message.includes(
-            "initialized",
-          )
-            ? `${message} This wallet may already own a platform configuration.`
-            : message,
+          error instanceof Error
+            ? error.message
+            : "Devnet PlatformConfig creation failed.",
         logs:
           possibleLogs,
       });
     }
   }
+
+  const mainnetVerificationPassed =
+    Boolean(
+      verification?.accountExists &&
+      verification?.ownerMatchesLaunchLab &&
+      verification?.cpmmMatches &&
+      verification?.platformFeeMatches &&
+      verification?.creatorFeeMatches,
+    );
 
   return (
     <main className="min-h-screen bg-[#070707] px-5 py-8 text-zinc-100 sm:px-8">
@@ -683,15 +730,18 @@ export default function PlatformSetupPage() {
             </p>
 
             <h1 className="mt-3 text-4xl font-black sm:text-5xl">
-              Register Kodiak
+              {isolatedMainnetSetup ||
+              KODIAK_IS_MAINNET
+                ? "Verify Kodiak"
+                : "Register Kodiak"}
             </h1>
 
             <p className="mt-4 max-w-2xl leading-7 text-zinc-400">
-              {KODIAK_MAINNET_REQUESTED_BUT_LOCKED
-                ? "Mainnet has been requested in production configuration, but Kodiak remains locked to Devnet until the separate Mainnet enable flag is intentionally activated."
-                : KODIAK_IS_DEVNET
-                  ? "Create Kodiak's one-time Raydium LaunchLab PlatformConfig using test-network SOL only."
-                  : "Production PlatformConfig creation is intentionally locked until Kodiak's Mainnet configuration has been fully verified."}
+              {isolatedMainnetSetup
+                ? "Read-only verification of Kodiak's existing Mainnet Raydium LaunchLab PlatformConfig. This page cannot create, update, or replace the Mainnet PlatformConfig."
+                : KODIAK_IS_MAINNET
+                  ? "Kodiak Mainnet is active. PlatformConfig creation is permanently disabled on this page."
+                  : "Create Kodiak's one-time Raydium LaunchLab PlatformConfig using test-network SOL only."}
             </p>
           </div>
 
@@ -705,104 +755,76 @@ export default function PlatformSetupPage() {
 
         <div className="mt-9 grid gap-6 lg:grid-cols-[1fr_.85fr]">
           <section className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-6 sm:p-8">
-            <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-5">
-              <p className="font-black text-amber-300">
-                {KODIAK_MAINNET_REQUESTED_BUT_LOCKED
-                  ? "Mainnet requested - locked"
-                  : KODIAK_IS_DEVNET
-                    ? "Devnet only"
-                    : "Mainnet locked"}
-              </p>
+            {isolatedMainnetSetup ? (
+              <>
+                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.05] p-5">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-black text-emerald-300">
+                        Existing Mainnet PlatformConfig
+                      </p>
+                      <p className="mt-2 text-sm leading-6 text-zinc-400">
+                        Verification only. No wallet signature and no Mainnet transaction can be produced from this page.
+                      </p>
+                    </div>
 
-              <p className="mt-2 text-sm leading-6 text-zinc-400">
-                {KODIAK_MAINNET_REQUESTED_BUT_LOCKED
-                  ? "The production environment is requesting Mainnet, but Kodiak's second safety gate is still closed. No Mainnet PlatformConfig transaction can be created from this page."
-                  : KODIAK_IS_DEVNET
-                    ? "This setup page currently creates Kodiak's Raydium LaunchLab PlatformConfig on Devnet only. Your connected wallet will approve a test transaction."
-                    : "Kodiak will not create a Mainnet PlatformConfig from this page until the production CPMM configuration and explicit production authority wallets have been verified and intentionally enabled."}
-              </p>
-            </div>
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-black ${
+                        mainnetVerificationPassed
+                          ? "bg-emerald-400/10 text-emerald-300"
+                          : status.kind === "working"
+                            ? "bg-amber-300/10 text-amber-300"
+                            : "bg-red-400/10 text-red-300"
+                      }`}
+                    >
+                      {mainnetVerificationPassed
+                        ? "VERIFIED"
+                        : status.kind === "working"
+                          ? "CHECKING"
+                          : "NOT VERIFIED"}
+                    </span>
+                  </div>
 
-            {KODIAK_MAINNET_REQUESTED_BUT_LOCKED && (
-              <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-5">
-                <div className="flex items-center justify-between gap-4">
-                  <p className="font-black text-zinc-200">
-                    Isolated Mainnet setup
-                  </p>
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-black ${
-                      MAINNET_SETUP_READY
-                        ? "bg-emerald-400/10 text-emerald-300"
-                        : "bg-amber-300/10 text-amber-300"
-                    }`}
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/25 p-4">
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-zinc-500">
+                      Mainnet PlatformConfig
+                    </p>
+
+                    <p className="mt-2 break-all font-mono text-sm text-emerald-300">
+                      {MAINNET_PLATFORM_ID}
+                    </p>
+
+                    <a
+                      href={kodiakExplorerAddressUrl(
+                        MAINNET_PLATFORM_ID,
+                      )}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 inline-block text-xs font-black text-amber-300"
+                    >
+                      View PlatformConfig on Solana Explorer
+                    </a>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void verifyExistingMainnetPlatform()
+                    }
+                    disabled={
+                      status.kind ===
+                      "working"
+                    }
+                    className="mt-4 w-full rounded-xl border border-emerald-400/30 px-5 py-3 text-sm font-black text-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    {MAINNET_SETUP_READY
-                      ? "ARMED"
-                      : "LOCKED"}
-                  </span>
+                    {status.kind ===
+                    "working"
+                      ? "Verifying on-chain..."
+                      : "Refresh Mainnet verification"}
+                  </button>
                 </div>
-                <p className="mt-3 text-sm leading-6 text-zinc-400">
-                  This setup uses the dedicated Mainnet RPC only on this page.
-                  The rest of Kodiak remains on Devnet.
-                </p>
-                {!MAINNET_SETUP_ENABLED && (
-                  <p className="mt-3 text-sm font-bold text-amber-300">
-                    NEXT_PUBLIC_KODIAK_MAINNET_SETUP_ENABLED is not enabled.
-                  </p>
-                )}
-                {MAINNET_SETUP_ENABLED &&
-                  !MAINNET_SETUP_RPC_URL && (
-                    <p className="mt-3 text-sm font-bold text-red-300">
-                      The dedicated Mainnet RPC URL is missing.
-                    </p>
-                  )}
-              </div>
-            )}
 
-            <div className="mt-7 space-y-5">
-              <div>
-                <p className="text-sm font-bold text-zinc-400">
-                  Transaction signer
-                </p>
-
-                <p className="mt-2 break-all rounded-2xl bg-black/25 p-4 font-mono text-sm text-emerald-300">
-                  {publicKey?.toBase58() ??
-                    "Connect a wallet"}
-                </p>
-
-                <p className="mt-3 text-sm text-zinc-400">
-                  {isolatedMainnetSetup
-                    ? "Mainnet"
-                    : NETWORK_LABEL}{" "}
-                  balance:{" "}
-                  <span className="font-bold text-zinc-100">
-                    {networkBalance ===
-                    null
-                      ? "Checking..."
-                      : `${networkBalance.toFixed(
-                          4,
-                        )} SOL`}
-                  </span>
-                </p>
-
-                {KODIAK_IS_DEVNET &&
-                  networkBalance !==
-                    null &&
-                  networkBalance <
-                    0.01 && (
-                    <p className="mt-2 text-sm font-bold text-amber-300">
-                      This wallet may
-                      need more Devnet
-                      SOL to create the
-                      PlatformConfig
-                      account.
-                    </p>
-                  )}
-              </div>
-
-              {(KODIAK_IS_MAINNET ||
-                KODIAK_MAINNET_REQUESTED_BUT_LOCKED) && (
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
+                <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-5">
                   <div className="flex items-center justify-between gap-4">
                     <p className="font-black text-zinc-200">
                       Production authority configuration
@@ -818,22 +840,14 @@ export default function PlatformSetupPage() {
                     >
                       {MAINNET_AUTHORITY_CONFIG_READY &&
                       MAINNET_CPMM_CONFIG_READY
-                        ? "READY"
+                        ? "CONFIGURED"
                         : "INCOMPLETE"}
                     </span>
                   </div>
 
-                  <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.04] p-3">
-                    <p className="text-xs font-black uppercase tracking-[0.14em] text-emerald-300">
-                      Verified Mainnet CPMM config
-                    </p>
-                    <p className="mt-2 break-all font-mono text-xs text-zinc-200">
-                      {KODIAK_MAINNET_CPMM_CONFIG_ID}
-                    </p>
-                    <p className="mt-2 text-xs leading-5 text-zinc-500">
-                      Raydium Mainnet CPMM index 8 - 0.25% base + 0.55% creator fee.
-                    </p>
-                  </div>
+                  <p className="mt-3 text-xs leading-5 text-zinc-500">
+                    These are Kodiak&apos;s configured production authorities. The read-only check above independently verifies the PlatformConfig account, LaunchLab ownership, CPMM target, and fee rates.
+                  </p>
 
                   <div className="mt-4 space-y-3 text-xs">
                     {[
@@ -867,181 +881,256 @@ export default function PlatformSetupPage() {
                       </div>
                     ))}
                   </div>
-
-                  <p className="mt-4 text-xs leading-5 text-zinc-500">
-                    Mainnet will use these explicit production authorities
-                    instead of copying whichever browser wallet happens to be
-                    connected. The connected signer must match the configured
-                    platform-admin wallet before creation can occur.
-                  </p>
                 </div>
-              )}
 
-              <label className="block">
-                <span className="mb-2 block text-sm font-bold text-zinc-300">
-                  {isolatedMainnetSetup
-                    ? "Mainnet"
-                    : NETWORK_LABEL}{" "}
-                  CPMM configuration
-                </span>
+                <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-5">
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-500">
+                    On-chain verification
+                  </p>
 
-                {configOptions.length >
-                0 ? (
-                  <select
-                    value={
-                      cpConfigId
-                    }
-                    onChange={(
-                      event,
-                    ) =>
-                      setCpConfigId(
-                        event.target
-                          .value,
-                      )
-                    }
-                    disabled={
-                      isolatedMainnetSetup ||
-                      !KODIAK_IS_DEVNET
-                    }
-                    className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-4 text-sm disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {configOptions.map(
-                      (id) => (
-                        <option
-                          key={
-                            id
-                          }
-                          value={
-                            id
-                          }
+                  <div className="mt-4 space-y-3 text-sm">
+                    {[
+                      [
+                        "PlatformConfig exists",
+                        verification?.accountExists,
+                      ],
+                      [
+                        "Owned by Raydium LaunchLab",
+                        verification?.ownerMatchesLaunchLab,
+                      ],
+                      [
+                        "CPMM index 8 config",
+                        verification?.cpmmMatches,
+                      ],
+                      [
+                        "Kodiak fee = 0.50%",
+                        verification?.platformFeeMatches,
+                      ],
+                      [
+                        "Creator curve fee = 0.45%",
+                        verification?.creatorFeeMatches,
+                      ],
+                    ].map(([label, passed]) => (
+                      <div
+                        key={String(label)}
+                        className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.025] px-4 py-3"
+                      >
+                        <span className="text-zinc-400">
+                          {String(label)}
+                        </span>
+
+                        <span
+                          className={`font-black ${
+                            passed === true
+                              ? "text-emerald-300"
+                              : passed === false
+                                ? "text-red-300"
+                                : "text-zinc-600"
+                          }`}
                         >
-                          {id}
-                        </option>
-                      ),
-                    )}
-                  </select>
-                ) : (
-                  <input
-                    value={
-                      cpConfigId
-                    }
-                    onChange={(
-                      event,
-                    ) =>
-                      setCpConfigId(
-                        event.target
-                          .value,
-                      )
-                    }
-                    disabled={
-                      isolatedMainnetSetup ||
-                      !KODIAK_IS_DEVNET
-                    }
-                    placeholder={
-                      KODIAK_IS_DEVNET
-                        ? "Paste a Devnet CPMM config ID"
-                        : "Verified Mainnet CPMM config"
-                    }
-                    className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-4 text-sm disabled:cursor-not-allowed disabled:opacity-40"
-                  />
-                )}
+                          {passed === true
+                            ? "PASS"
+                            : passed === false
+                              ? "FAIL"
+                              : "WAITING"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
 
-                {cpConfigId &&
-                  !cpConfigIsValid && (
-                    <p className="mt-2 text-sm font-bold text-red-300">
-                      This is not a
-                      valid Solana CPMM
-                      configuration
-                      address.
+                  {verification?.actualCpmmConfig && (
+                    <p className="mt-4 break-all text-xs text-zinc-500">
+                      On-chain CPMM config:{" "}
+                      <span className="font-mono text-zinc-300">
+                        {verification.actualCpmmConfig}
+                      </span>
                     </p>
                   )}
-              </label>
-
-              <label className="flex items-start gap-3 rounded-2xl border border-white/10 bg-black/20 p-5">
-                <input
-                  type="checkbox"
-                  checked={
-                    confirmed
-                  }
-                  onChange={(
-                    event,
-                  ) =>
-                    setConfirmed(
-                      event.target
-                        .checked,
-                    )
-                  }
-                  disabled={
-                    !KODIAK_IS_DEVNET &&
-                    !isolatedMainnetSetup
-                  }
-                  className="mt-1 h-5 w-5 accent-emerald-400 disabled:opacity-40"
-                />
-
-                <span className="text-sm leading-6 text-zinc-400">
-                  {isolatedMainnetSetup
-                    ? "I understand this creates Kodiak's one-time Mainnet PlatformConfig using real SOL, while the rest of Kodiak remains on Devnet."
-                    : KODIAK_IS_DEVNET
-                      ? "I understand this creates a one-time on-chain configuration tied to my connected wallet and uses Devnet SOL."
-                      : "Mainnet PlatformConfig creation is locked until Kodiak's production configuration is intentionally enabled."}
-                </span>
-              </label>
-
-              {!connected ? (
-                <div className="flex justify-center">
-                  <KodiakWalletButton />
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  disabled={
-                    !canCreate
-                  }
-                  onClick={() =>
-                    void createPlatform()
-                  }
-                  className="w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
-                >
-                  {status.kind ===
-                  "working"
-                    ? "Waiting for transaction..."
-                    : isolatedMainnetSetup
-                      ? "Create Kodiak Mainnet Platform"
-                      : KODIAK_IS_DEVNET
-                        ? "Create Kodiak Devnet Platform"
-                        : "Mainnet Setup Locked"}
-                </button>
-              )}
-            </div>
+              </>
+            ) : KODIAK_IS_MAINNET ? (
+              <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.05] p-5">
+                <p className="font-black text-emerald-300">
+                  Mainnet PlatformConfig creation disabled
+                </p>
+
+                <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  Kodiak already has its production PlatformConfig. This page contains no Mainnet creation or update transaction path.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-5">
+                  <p className="font-black text-amber-300">
+                    Devnet only
+                  </p>
+
+                  <p className="mt-2 text-sm leading-6 text-zinc-400">
+                    Devnet PlatformConfig creation remains available for test-network development. This cannot create a Mainnet PlatformConfig.
+                  </p>
+                </div>
+
+                <div className="mt-7 space-y-5">
+                  <div>
+                    <p className="text-sm font-bold text-zinc-400">
+                      Transaction signer
+                    </p>
+
+                    <p className="mt-2 break-all rounded-2xl bg-black/25 p-4 font-mono text-sm text-emerald-300">
+                      {publicKey?.toBase58() ??
+                        "Connect a wallet"}
+                    </p>
+
+                    <p className="mt-3 text-sm text-zinc-400">
+                      Devnet balance:{" "}
+                      <span className="font-bold text-zinc-100">
+                        {networkBalance ===
+                        null
+                          ? "Checking..."
+                          : `${networkBalance.toFixed(
+                              4,
+                            )} SOL`}
+                      </span>
+                    </p>
+                  </div>
+
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-bold text-zinc-300">
+                      Devnet CPMM configuration
+                    </span>
+
+                    {configOptions.length >
+                    0 ? (
+                      <select
+                        value={
+                          cpConfigId
+                        }
+                        onChange={(
+                          event,
+                        ) =>
+                          setCpConfigId(
+                            event.target
+                              .value,
+                          )
+                        }
+                        className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-4 text-sm"
+                      >
+                        {configOptions.map(
+                          (id) => (
+                            <option
+                              key={
+                                id
+                              }
+                              value={
+                                id
+                              }
+                            >
+                              {id}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                    ) : (
+                      <input
+                        value={
+                          cpConfigId
+                        }
+                        onChange={(
+                          event,
+                        ) =>
+                          setCpConfigId(
+                            event.target
+                              .value,
+                          )
+                        }
+                        placeholder="Paste a Devnet CPMM config ID"
+                        className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-4 text-sm"
+                      />
+                    )}
+
+                    {cpConfigId &&
+                      !cpConfigIsValid && (
+                        <p className="mt-2 text-sm font-bold text-red-300">
+                          This is not a valid Solana CPMM configuration address.
+                        </p>
+                      )}
+                  </label>
+
+                  <label className="flex items-start gap-3 rounded-2xl border border-white/10 bg-black/20 p-5">
+                    <input
+                      type="checkbox"
+                      checked={
+                        confirmed
+                      }
+                      onChange={(
+                        event,
+                      ) =>
+                        setConfirmed(
+                          event.target
+                            .checked,
+                        )
+                      }
+                      className="mt-1 h-5 w-5 accent-emerald-400"
+                    />
+
+                    <span className="text-sm leading-6 text-zinc-400">
+                      I understand this creates a one-time on-chain configuration tied to my connected wallet and uses Devnet SOL.
+                    </span>
+                  </label>
+
+                  {!connected ? (
+                    <div className="flex justify-center">
+                      <KodiakWalletButton />
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={
+                        !canCreateDevnet
+                      }
+                      onClick={() =>
+                        void createDevnetPlatform()
+                      }
+                      className="w-full rounded-2xl bg-gradient-to-r from-emerald-400 to-amber-300 px-6 py-4 text-lg font-black text-black disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+                    >
+                      {status.kind ===
+                      "working"
+                        ? "Waiting for transaction..."
+                        : "Create Kodiak Devnet Platform"}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </section>
 
           <aside className="space-y-5">
             <section className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-6">
               <h2 className="text-xl font-black">
-                On-chain settings
+                Production settings
               </h2>
 
               <div className="mt-5 space-y-4 text-sm">
                 {[
                   [
                     "Kodiak platform fee",
-                    "0.50%",
+                    KODIAK_FEE_LABELS.kodiakPlatform,
                   ],
                   [
                     "Creator curve fee",
-                    "0.45%",
+                    KODIAK_FEE_LABELS.creatorCurve,
                   ],
                   [
                     "Migrated LP burned",
-                    "90%",
+                    KODIAK_FEE_LABELS.migratedLpBurn,
                   ],
                   [
                     "Creator Fee Key share",
-                    "10%",
+                    KODIAK_FEE_LABELS.creatorFeeKeyLpShare,
                   ],
                   [
                     "Platform LP share",
-                    "0%",
+                    KODIAK_FEE_LABELS.platformLpShare,
                   ],
                   [
                     "LP scale total",
@@ -1098,8 +1187,7 @@ export default function PlatformSetupPage() {
                   0 && (
                   <div className="mt-5">
                     <p className="text-xs font-black uppercase tracking-[0.14em] text-red-300">
-                      Solana simulation
-                      logs
+                      Solana simulation logs
                     </p>
 
                     <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-black/40 p-4 text-[11px] leading-5 text-zinc-300">
@@ -1114,8 +1202,7 @@ export default function PlatformSetupPage() {
                 "success" && (
                 <div className="mt-5">
                   <p className="text-xs text-zinc-500">
-                    PlatformConfig
-                    address
+                    PlatformConfig address
                   </p>
 
                   <p className="mt-2 break-all rounded-xl bg-black/30 p-3 font-mono text-xs text-emerald-300">

@@ -282,7 +282,7 @@ function TransactionList({ title, transactions, network }: { title: string; tran
               </div>
             </summary>
             <div className="mt-4 border-t border-white/5 pt-4">
-              {Boolean(tx.err && (
+              {Boolean(tx.err) && (
                 <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-xl bg-black/40 p-3 text-xs text-rose-200">{JSON.stringify(tx.err, null, 2)}</pre>
               )}
               {tx.logs?.length ? (

@@ -551,6 +551,83 @@ export function ClaimCreatorRewards() {
     signAllTransactions,
   ]);
 
+  async function sendWalletFirstTransaction(
+    transaction: VersionedTransaction,
+  ): Promise<string> {
+    if (!signTransaction) {
+      throw new Error(
+        `Connect a wallet on ${NETWORK_LABEL} first.`,
+      );
+    }
+
+    const latestBlockhash =
+      await connection.getLatestBlockhash(
+        "confirmed",
+      );
+
+    transaction.message.recentBlockhash =
+      latestBlockhash.blockhash;
+
+    transaction.signatures =
+      transaction.signatures.map(
+        () => new Uint8Array(64),
+      );
+
+    const simulation =
+      await connection.simulateTransaction(
+        transaction,
+        {
+          commitment: "confirmed",
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        },
+      );
+
+    if (simulation.value.err) {
+      throw new Error(
+        `Claim simulation failed before wallet handoff: ${JSON.stringify(
+          simulation.value.err,
+        )}`,
+      );
+    }
+
+    const walletSigned =
+      await signTransaction(
+        transaction,
+      );
+
+    const signature =
+      await connection.sendRawTransaction(
+        walletSigned.serialize(),
+        {
+          skipPreflight: false,
+          maxRetries: 5,
+        },
+      );
+
+    const confirmation =
+      await connection.confirmTransaction(
+        {
+          signature,
+          blockhash:
+            latestBlockhash.blockhash,
+          lastValidBlockHeight:
+            latestBlockhash.lastValidBlockHeight,
+        },
+        "confirmed",
+      );
+
+    if (confirmation.value.err) {
+      throw new Error(
+        `The ${NETWORK_LABEL} claim was submitted but failed on-chain: ${JSON.stringify(
+          confirmation.value.err,
+        )}`,
+      );
+    }
+
+    return signature;
+  }
+
   async function claim() {
     if (
       !connected ||
@@ -581,7 +658,7 @@ export function ClaimCreatorRewards() {
           signAllTransactions,
         });
 
-      const { execute } =
+      const built =
         await raydium.launchpad.claimCreatorFee(
           {
             programId:
@@ -597,21 +674,27 @@ export function ClaimCreatorRewards() {
           },
         );
 
+      if (!(built.transaction instanceof VersionedTransaction)) {
+        throw new Error(
+          "Kodiak expected a versioned LaunchLab creator-fee claim transaction.",
+        );
+      }
+
+      if (built.signers.length !== 0) {
+        throw new Error(
+          `Kodiak stopped the creator-fee claim because Raydium returned ${built.signers.length} additional signer(s). No transaction was sent to the wallet.`,
+        );
+      }
+
       setStatus({
         kind: "working",
         message:
-          `Approve the ${NETWORK_LABEL} LaunchLab creator-fee claim in your wallet...`,
+          `Simulating the ${NETWORK_LABEL} LaunchLab creator-fee claim before wallet approval...`,
       });
 
-      const result =
-        await execute({
-          sendAndConfirm:
-            true,
-        });
-
       const signature =
-        signatureFrom(
-          result,
+        await sendWalletFirstTransaction(
+          built.transaction,
         );
 
       await refreshClaimableBalance();
@@ -802,13 +885,14 @@ export function ClaimCreatorRewards() {
           : {}),
       };
 
-      const {
-        transaction,
-        execute,
-      } =
+      const built =
         await raydium.cpmm.harvestLockLp(
           params,
         );
+
+      const {
+        transaction,
+      } = built;
 
       if (
         transaction instanceof
@@ -859,21 +943,27 @@ export function ClaimCreatorRewards() {
         );
       }
 
+      if (!(transaction instanceof VersionedTransaction)) {
+        throw new Error(
+          "Kodiak expected a versioned CPMM Fee Key claim transaction.",
+        );
+      }
+
+      if (built.signers.length !== 0) {
+        throw new Error(
+          `Kodiak stopped the Fee Key claim because Raydium returned ${built.signers.length} additional signer(s). No transaction was sent to the wallet.`,
+        );
+      }
+
       setStatus({
         kind: "working",
         message:
-          `Simulation passed. Approve the ${NETWORK_LABEL} CPMM Fee Key claim in your wallet...`,
+          `Simulation passed. Opening the ${NETWORK_LABEL} CPMM Fee Key claim in your wallet...`,
       });
 
-      const result =
-        await execute({
-          sendAndConfirm:
-            true,
-        });
-
       const signature =
-        signatureFrom(
-          result,
+        await sendWalletFirstTransaction(
+          transaction,
         );
 
       await discoverFeeKeys();

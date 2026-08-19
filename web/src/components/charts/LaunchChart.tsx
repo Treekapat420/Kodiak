@@ -75,9 +75,114 @@ function formatPrice(value: number) {
 
   if (absolute >= 1) return value.toFixed(4);
   if (absolute >= 0.01) return value.toFixed(6);
-  if (absolute >= 0.000001) return value.toFixed(8);
+  if (absolute >= 0.0001) return value.toFixed(8);
+  if (absolute >= 0.000001) return value.toFixed(10);
 
-  return value.toFixed(10).replace(/0+$/, "").replace(/\.$/, "");
+  return value.toFixed(12).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function priceFormatFor(value: number) {
+  const absolute = Math.abs(value);
+
+  if (!Number.isFinite(absolute) || absolute === 0) {
+    return {
+      type: "price" as const,
+      precision: 10,
+      minMove: 0.0000000001,
+    };
+  }
+
+  if (absolute >= 1) {
+    return {
+      type: "price" as const,
+      precision: 4,
+      minMove: 0.0001,
+    };
+  }
+
+  if (absolute >= 0.01) {
+    return {
+      type: "price" as const,
+      precision: 6,
+      minMove: 0.000001,
+    };
+  }
+
+  if (absolute >= 0.0001) {
+    return {
+      type: "price" as const,
+      precision: 8,
+      minMove: 0.00000001,
+    };
+  }
+
+  if (absolute >= 0.000001) {
+    return {
+      type: "price" as const,
+      precision: 10,
+      minMove: 0.0000000001,
+    };
+  }
+
+  return {
+    type: "price" as const,
+    precision: 12,
+    minMove: 0.000000000001,
+  };
+}
+
+function chartHeight(expanded: boolean) {
+  if (expanded) {
+    return Math.max(window.innerHeight - 170, 420);
+  }
+
+  return Math.min(
+    560,
+    Math.max(
+      420,
+      Math.round(window.innerHeight * 0.52),
+    ),
+  );
+}
+
+function chartWindow(candleCount: number, expanded: boolean) {
+  if (candleCount <= 1) {
+    return {
+      from: -10,
+      to: expanded ? 16 : 12,
+      barSpacing: expanded ? 20 : 17,
+      rightOffset: expanded ? 8 : 6,
+    };
+  }
+
+  if (candleCount <= 4) {
+    return {
+      from: -4,
+      to: expanded ? 11 : 9,
+      barSpacing: expanded ? 22 : 19,
+      rightOffset: expanded ? 6 : 5,
+    };
+  }
+
+  if (candleCount <= 12) {
+    return {
+      from: -1,
+      to: candleCount + (expanded ? 5 : 4),
+      barSpacing: expanded ? 18 : 15,
+      rightOffset: expanded ? 5 : 4,
+    };
+  }
+
+  if (candleCount <= 30) {
+    return {
+      from: Math.max(0, candleCount - 24),
+      to: candleCount + (expanded ? 4 : 3),
+      barSpacing: expanded ? 14 : 11,
+      rightOffset: expanded ? 4 : 3,
+    };
+  }
+
+  return null;
 }
 
 function sameCandle(left: Candle, right: Candle) {
@@ -145,7 +250,7 @@ export function LaunchChart({ mint }: { mint: string }) {
         setLoading(false);
         setMessage(
           nextCandles.length
-            ? `${nextCandles.length} candle${nextCandles.length === 1 ? "" : "s"} | updates every 3 seconds`
+            ? `${nextCandles.length} candle${nextCandles.length === 1 ? "" : "s"} Â· live updates every 3 seconds`
             : "No trades yet.",
         );
       } catch (error) {
@@ -178,7 +283,7 @@ export function LaunchChart({ mint }: { mint: string }) {
 
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: expanded ? window.innerHeight - 170 : 460,
+      height: chartHeight(expanded),
       layout: {
         background: {
           type: ColorType.Solid,
@@ -209,8 +314,8 @@ export function LaunchChart({ mint }: { mint: string }) {
         autoScale: true,
         borderColor: "rgba(255,255,255,0.12)",
         scaleMargins: {
-          top: 0.16,
-          bottom: 0.32,
+          top: 0.10,
+          bottom: 0.24,
         },
       },
       timeScale: {
@@ -218,9 +323,9 @@ export function LaunchChart({ mint }: { mint: string }) {
         timeVisible: true,
         secondsVisible: interval === "1s",
         borderColor: "rgba(255,255,255,0.12)",
-        rightOffset: 5,
-        barSpacing: 10,
-        minBarSpacing: 1,
+        rightOffset: 4,
+        barSpacing: 11,
+        minBarSpacing: 3,
         lockVisibleTimeRangeOnResize: true,
         rightBarStaysOnScroll: false,
       },
@@ -249,11 +354,7 @@ export function LaunchChart({ mint }: { mint: string }) {
       wickDownColor: "#ff4d67",
       priceLineVisible: true,
       lastValueVisible: true,
-      priceFormat: {
-        type: "price",
-        precision: 10,
-        minMove: 0.0000000001,
-      },
+      priceFormat: priceFormatFor(0),
       visible: mode === "candles",
     });
 
@@ -263,11 +364,7 @@ export function LaunchChart({ mint }: { mint: string }) {
       crosshairMarkerVisible: true,
       priceLineVisible: true,
       lastValueVisible: true,
-      priceFormat: {
-        type: "price",
-        precision: 10,
-        minMove: 0.0000000001,
-      },
+      priceFormat: priceFormatFor(0),
       visible: mode === "line",
     });
 
@@ -280,7 +377,7 @@ export function LaunchChart({ mint }: { mint: string }) {
 
     volumeSeries.priceScale().applyOptions({
       scaleMargins: {
-        top: 0.80,
+        top: 0.76,
         bottom: 0,
       },
     });
@@ -321,7 +418,7 @@ export function LaunchChart({ mint }: { mint: string }) {
 
       chart.applyOptions({
         width: target.clientWidth,
-        height: expanded ? window.innerHeight - 170 : 460,
+        height: chartHeight(expanded),
       });
     };
 
@@ -403,32 +500,65 @@ export function LaunchChart({ mint }: { mint: string }) {
 
     previousCandlesRef.current = candles.map((item) => ({ ...item }));
 
-    if (!fittedRef.current && candles.length > 0) {
-      if (candles.length === 1) {
-        chart.timeScale().applyOptions({
-          barSpacing: expanded ? 18 : 14,
-          rightOffset: expanded ? 18 : 14,
-        });
+    if (candles.length > 0) {
+      const currentPrice =
+        candles.at(-1)?.close ??
+        0;
 
-        chart.timeScale().setVisibleLogicalRange({
-          from: -18,
-          to: 18,
-        });
-      } else if (candles.length <= 3) {
-        chart.timeScale().applyOptions({
-          barSpacing: expanded ? 22 : 18,
-          rightOffset: expanded ? 10 : 7,
-        });
+      const seriesPriceFormat =
+        priceFormatFor(
+          currentPrice,
+        );
 
-        chart.timeScale().setVisibleLogicalRange({
-          from: -8,
-          to: 12,
-        });
-      } else {
-        chart.timeScale().fitContent();
+      candleSeries.applyOptions({
+        priceFormat:
+          seriesPriceFormat,
+      });
+
+      lineSeries.applyOptions({
+        priceFormat:
+          seriesPriceFormat,
+      });
+
+      if (!fittedRef.current) {
+        const window =
+          chartWindow(
+            candles.length,
+            expanded,
+          );
+
+        if (window) {
+          chart.timeScale().applyOptions({
+            barSpacing:
+              window.barSpacing,
+            rightOffset:
+              window.rightOffset,
+          });
+
+          chart.timeScale().setVisibleLogicalRange({
+            from:
+              window.from,
+            to:
+              window.to,
+          });
+        } else {
+          chart.timeScale().applyOptions({
+            barSpacing:
+              expanded
+                ? 10
+                : 8,
+            rightOffset:
+              expanded
+                ? 4
+                : 3,
+          });
+
+          chart.timeScale().fitContent();
+        }
+
+        fittedRef.current =
+          true;
       }
-
-      fittedRef.current = true;
     }
   }, [candles, expanded]);
 
@@ -471,30 +601,36 @@ export function LaunchChart({ mint }: { mint: string }) {
     const chart = chartRef.current;
     if (!chart || candles.length === 0) return;
 
-    if (candles.length === 1) {
+    const window =
+      chartWindow(
+        candles.length,
+        expanded,
+      );
+
+    if (window) {
       chart.timeScale().applyOptions({
-        barSpacing: expanded ? 18 : 14,
-        rightOffset: expanded ? 18 : 14,
+        barSpacing:
+          window.barSpacing,
+        rightOffset:
+          window.rightOffset,
       });
 
       chart.timeScale().setVisibleLogicalRange({
-        from: -18,
-        to: 18,
-      });
-    } else if (candles.length <= 3) {
-      chart.timeScale().applyOptions({
-        barSpacing: expanded ? 22 : 18,
-        rightOffset: expanded ? 10 : 7,
-      });
-
-      chart.timeScale().setVisibleLogicalRange({
-        from: -8,
-        to: 12,
+        from:
+          window.from,
+        to:
+          window.to,
       });
     } else {
       chart.timeScale().applyOptions({
-        barSpacing: 10,
-        rightOffset: expanded ? 8 : 5,
+        barSpacing:
+          expanded
+            ? 10
+            : 8,
+        rightOffset:
+          expanded
+            ? 4
+            : 3,
       });
 
       chart.timeScale().fitContent();
@@ -503,8 +639,8 @@ export function LaunchChart({ mint }: { mint: string }) {
     chart.priceScale("right").applyOptions({
       autoScale: true,
       scaleMargins: {
-        top: 0.16,
-        bottom: 0.32,
+        top: 0.10,
+        bottom: 0.24,
       },
     });
   };
@@ -624,8 +760,12 @@ export function LaunchChart({ mint }: { mint: string }) {
         <div
           ref={containerRef}
           onDoubleClick={reset}
-          className={expanded ? "h-full w-full" : "min-h-[460px] w-full"}
+          className={expanded ? "h-full w-full" : "w-full"}
           style={{
+            height:
+              expanded
+                ? "100%"
+                : "clamp(420px, 52vh, 560px)",
             touchAction: "none",
             overscrollBehavior: "contain",
           }}

@@ -63,9 +63,10 @@ function statusLabel(status: number) {
 }
 
 function progressBps(realB: bigint, targetB: bigint) {
-  if (targetB <= 0n) return 0;
-  const value = Number((realB * 10_000n) / targetB);
-  return Math.max(0, Math.min(10_000, value));
+  if (targetB <= BigInt(0)) return 0;
+
+  const value = Number((realB * BigInt(10000)) / targetB);
+  return Math.max(0, Math.min(10000, value));
 }
 
 function lamportsToSolString(value: bigint) {

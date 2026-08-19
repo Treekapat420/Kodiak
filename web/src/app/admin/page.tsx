@@ -3,6 +3,7 @@
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import { ClaimPlatformRevenue } from "@/components/creator/ClaimPlatformRevenue";
+import { GraduationDiagnostics } from "@/components/admin/GraduationDiagnostics";
 import { isKodiakAdminWallet } from "@/lib/admin";
 
 export default function AdminPage() {
@@ -76,6 +77,8 @@ export default function AdminPage() {
             </p>
           </div>
         </header>
+
+        <GraduationDiagnostics />
 
         <ClaimPlatformRevenue />
       </div>

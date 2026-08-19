@@ -70,10 +70,13 @@ function progressBps(realB: bigint, targetB: bigint) {
 }
 
 function lamportsToSolString(value: bigint) {
-  const whole = value / 1_000_000_000n;
-  const fraction = (value % 1_000_000_000n)
+  const LAMPORTS_PER_SOL = BigInt(1000000000);
+
+  const whole = value / LAMPORTS_PER_SOL;
+
+  const fraction = (value % LAMPORTS_PER_SOL)
     .toString()
-    .padStart(9, "0")
+    .padStart(9, "0");
     .replace(/0+$/, "");
 
   return fraction ? `${whole}.${fraction}` : whole.toString();

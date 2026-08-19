@@ -76,7 +76,7 @@ function lamportsToSolString(value: bigint) {
 
   const fraction = (value % LAMPORTS_PER_SOL)
     .toString()
-    .padStart(9, "0");
+    .padStart(9, "0")
     .replace(/0+$/, "");
 
   return fraction ? `${whole}.${fraction}` : whole.toString();

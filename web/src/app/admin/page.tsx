@@ -65,7 +65,7 @@ export default function AdminPage() {
           </h1>
 
           <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-400">
-            Private Devnet controls for Kodiak platform revenue and administrative operations.
+            Private Mainnet controls for Kodiak platform revenue and administrative operations.
           </p>
 
           <div className="mt-5 rounded-2xl border border-white/10 bg-black/25 p-4">

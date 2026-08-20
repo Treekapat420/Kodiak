@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
 
 type DiagnosticCheck = {
   id: string;
@@ -96,6 +97,7 @@ function StateBadge({ label, active }: { label: string; active: boolean }) {
 }
 
 export function GraduationDiagnostics() {
+  const { publicKey, signMessage } = useWallet();
   const [mint, setMint] = useState("");
   const [data, setData] = useState<Diagnostics | null>(null);
   const [error, setError] = useState("");
@@ -112,8 +114,22 @@ export function GraduationDiagnostics() {
     setData(null);
 
     try {
+      if (!publicKey || !signMessage) {
+        throw new Error("Connect the authorized Mainnet admin wallet with message signing support.");
+      }
+
+      const issuedAt = new Date().toISOString();
+      const authMessage = `Kodiak Admin Graduation Diagnostics\nWallet: ${publicKey.toBase58()}\nMint: ${value}\nIssued At: ${issuedAt}`;
+      const signed = await signMessage(new TextEncoder().encode(authMessage));
+      const signature = btoa(String.fromCharCode(...signed));
+
       const response = await fetch(`/api/token/${encodeURIComponent(value)}/graduation/diagnostics`, {
         cache: "no-store",
+        headers: {
+          "x-kodiak-admin-wallet": publicKey.toBase58(),
+          "x-kodiak-admin-issued-at": issuedAt,
+          "x-kodiak-admin-signature": signature,
+        },
       });
       const body = await response.json();
 

@@ -71,6 +71,9 @@ type Status =
   | { kind: "error"; message: string; logs?: string[]; code?: string; action?: string; technical?: string };
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
+// Keep a small SOL cushion for network fees and any token-account setup
+// the wallet may need during a buy (for example WSOL/token ATAs).
+const BUY_SOL_RESERVE_LAMPORTS = 10_000_000; // 0.01 SOL
 const TRADE_SLIPPAGE = new BN(100);
 const NETWORK_LABEL = kodiakNetworkLabel();
 
@@ -1310,7 +1313,7 @@ export default function TradePage() {
       );
     }
 
-    const signature =
+const signature =
       await sendFreshWalletTransaction(
         freshBuild.transaction,
       );
@@ -1671,6 +1674,58 @@ export default function TradePage() {
           "The SOL amount could not be converted to lamports.",
       });
       return;
+    }
+
+    // Catch an obviously underfunded buy before Raydium builds/simulates it.
+    // A little SOL is intentionally left untouched for transaction fees and
+    // possible associated-token-account setup. This produces a useful Kodiak
+    // error instead of exposing a low-level LaunchLab simulation failure.
+    try {
+      const walletLamports =
+        await connection.getBalance(
+          publicKey,
+          "confirmed",
+        );
+
+      setWalletSol(
+        (walletLamports / LAMPORTS_PER_SOL).toFixed(4),
+      );
+
+      const minimumRequiredLamports =
+        lamports + BUY_SOL_RESERVE_LAMPORTS;
+
+      if (walletLamports < minimumRequiredLamports) {
+        const availableSol =
+          walletLamports / LAMPORTS_PER_SOL;
+        const requestedSol =
+          lamports / LAMPORTS_PER_SOL;
+        const reserveSol =
+          BUY_SOL_RESERVE_LAMPORTS / LAMPORTS_PER_SOL;
+        const maxSpendableSol = Math.max(
+          0,
+          (walletLamports - BUY_SOL_RESERVE_LAMPORTS) /
+            LAMPORTS_PER_SOL,
+        );
+
+        setStatus({
+          kind: "error",
+          message:
+            `Insufficient SOL. This wallet has about ${availableSol.toFixed(4)} SOL, but the requested buy is ${requestedSol.toFixed(4)} SOL.`,
+          action:
+            `Lower the buy amount or add SOL to the wallet. Kodiak keeps about ${reserveSol.toFixed(2)} SOL available for network fees and token-account setup. Maximum suggested buy right now: ${maxSpendableSol.toFixed(4)} SOL.`,
+          code: "INSUFFICIENT_FUNDS",
+          technical:
+            `Wallet balance: ${walletLamports} lamports; requested buy: ${lamports} lamports; safety reserve: ${BUY_SOL_RESERVE_LAMPORTS} lamports.`,
+        });
+        return;
+      }
+    } catch (error) {
+      // A temporary balance-RPC failure should not block a legitimate trade.
+      // The normal simulation remains the final safety gate below.
+      console.warn(
+        "Kodiak could not preflight the wallet SOL balance:",
+        error,
+      );
     }
 
     if (
@@ -2173,7 +2228,7 @@ export default function TradePage() {
 
       /*
        * IMPORTANT:
-      * Do not pass minAmountB: new BN(0).
+       * Do not pass minAmountB: new BN(0).
        *
        * Raydium LaunchLab rejects a zero minimum WSOL
        * output. By omitting minAmountB and supplying

@@ -108,13 +108,20 @@ export default function DocsPage() {
             </Section>
 
             <Section id="safety" title="Safety & transparency">
-              <ul className="space-y-3">
-                <li>â¢ Your wallet must approve transactions. Kodiak cannot sign for you.</li>
-                <li>â¢ Kodiak simulates supported transactions before wallet approval when possible and blocks known failed simulations.</li>
-                <li>â¢ LaunchLab and CPMM state are verified on-chain before Kodiak changes trading modes.</li>
-                <li>â¢ Blockchain transactions are irreversible. Always verify the token, amount, network, and wallet prompt before signing.</li>
-                <li>â¢ Kodiak is in public beta. Smart-contract, integration, market, and third-party risks still exist.</li>
-              </ul>
+              <div className="space-y-3">
+                {[
+                  "Your wallet must approve transactions. Kodiak cannot sign for you.",
+                  "Kodiak simulates supported transactions before wallet approval when possible and blocks known failed simulations.",
+                  "LaunchLab and CPMM state are verified on-chain before Kodiak changes trading modes.",
+                  "Blockchain transactions are irreversible. Always verify the token, amount, network, and wallet prompt before signing.",
+                  "Kodiak is in public beta. Smart-contract, integration, market, and third-party risks still exist.",
+                ].map((item) => (
+                  <div key={item} className="flex gap-3 rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <span aria-hidden="true" className="mt-2 h-2 w-2 shrink-0 rounded-full bg-amber-300" />
+                    <p>{item}</p>
+                  </div>
+                ))}
+              </div>
             </Section>
 
             <Section id="faq" title="Frequently asked questions">

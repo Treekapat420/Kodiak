@@ -13,6 +13,7 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
+import { classifyKodiakFailure } from "@/lib/transactionFailure";
 import {
   KODIAK_LAUNCHPAD_PROGRAM_ID,
   loadKodiakRaydium,
@@ -134,7 +135,7 @@ export default function LaunchPage() {
     | { kind: "idle"; message: string }
     | { kind: "working"; message: string }
     | { kind: "success"; message: string; mint: string; signatures: string[] }
-    | { kind: "error"; message: string; logs?: string[] }
+    | { kind: "error"; message: string; logs?: string[]; code?: string; action?: string; technical?: string }
   >({ kind: "idle", message: `Ready to prepare a ${NETWORK_LABEL} launch.` });
 
   useEffect(() => {
@@ -567,9 +568,10 @@ export default function LaunchPage() {
 
           setLaunchStatus({
             kind: "error",
-            message: `Kodiak simulation failed at transaction ${
-              index + 1
-            } of ${transactionCount}: ${JSON.stringify(simulation.value.err)}`,
+            message: "Kodiak's safety simulation found a problem, so the wallet transaction was not sent.",
+            action: "Do not keep retrying blindly. If this repeats, send Kodiak support the support code and program logs below.",
+            code: "SIMULATION_FAILED",
+            technical: `Simulation failed at transaction ${index + 1} of ${transactionCount}: ${JSON.stringify(simulation.value.err)}`,
             logs: simulation.value.logs ?? [],
           });
           return;
@@ -864,6 +866,10 @@ export default function LaunchPage() {
         error instanceof Error
           ? error.message
           : `Unable to prepare the ${NETWORK_LABEL} launch.`;
+      const failure = classifyKodiakFailure(
+        error,
+        `The ${NETWORK_LABEL} launch did not complete.`,
+      );
 
       if (kodiakSimulationPassed) {
         setSimulationDiagnostic((current) => ({
@@ -894,8 +900,10 @@ export default function LaunchPage() {
 
         setLaunchStatus({
           kind: "error",
-          message:
-            `Kodiak simulation PASSED, but the post-simulation launch did not complete. Wallet / transaction response: ${walletOrLaunchError}`,
+          message: failure.message,
+          action: failure.action,
+          code: failure.code,
+          technical: `Simulation passed; post-simulation failure: ${walletOrLaunchError}`,
           logs,
         });
         return;
@@ -903,7 +911,10 @@ export default function LaunchPage() {
 
       setLaunchStatus({
         kind: "error",
-        message: walletOrLaunchError,
+        message: failure.message,
+        action: failure.action,
+        code: failure.code,
+        technical: failure.technical,
         logs,
       });
     }
@@ -1372,6 +1383,22 @@ export default function LaunchPage() {
                       }`}
                     >
                       <p className="font-bold">{launchStatus.message}</p>
+
+                      {launchStatus.kind === "error" && launchStatus.action && (
+                        <div className="mt-3 rounded-xl border border-red-300/15 bg-black/30 p-3">
+                          <p className="text-xs font-black uppercase tracking-[0.12em] text-red-200">What to do</p>
+                          <p className="mt-2 text-xs leading-5 text-zinc-300">{launchStatus.action}</p>
+                          {launchStatus.code && (
+                            <p className="mt-3 font-mono text-[11px] text-zinc-500">Support code: {launchStatus.code}</p>
+                          )}
+                          {launchStatus.technical && (
+                            <details className="mt-3">
+                              <summary className="cursor-pointer text-xs font-bold text-zinc-400">Technical details</summary>
+                              <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-5 text-zinc-500">{launchStatus.technical}</pre>
+                            </details>
+                          )}
+                        </div>
+                      )}
 
                       {launchStatus.kind === "error" &&
                         launchStatus.logs &&

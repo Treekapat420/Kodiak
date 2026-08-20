@@ -11,6 +11,8 @@ import {
 } from "@raydium-io/raydium-sdk-v2";
 
 import { KODIAK_LAUNCHPAD_PROGRAM_ID } from "@/lib/raydium/devnet";
+import { verifySolanaMessage } from "@/lib/server/verify-solana-signature";
+import { isKodiakAdminWallet } from "@/lib/admin";
 import {
   KODIAK_IS_DEVNET,
   KODIAK_IS_MAINNET,
@@ -132,9 +134,27 @@ async function recentSignatures(address: PublicKey, limit = 12) {
   return detailed;
 }
 
-export async function GET(_request: NextRequest, context: Context) {
+export async function GET(request: NextRequest, context: Context) {
   try {
     const { mint: rawMint } = await context.params;
+
+    const wallet = request.headers.get("x-kodiak-admin-wallet")?.trim() || "";
+    const issuedAt = request.headers.get("x-kodiak-admin-issued-at")?.trim() || "";
+    const signature = request.headers.get("x-kodiak-admin-signature")?.trim() || "";
+
+    if (!isKodiakAdminWallet(wallet) || !issuedAt || !signature) {
+      return NextResponse.json({ error: "Unauthorized admin request." }, { status: 401 });
+    }
+
+    const issuedMs = Date.parse(issuedAt);
+    if (!Number.isFinite(issuedMs) || Math.abs(Date.now() - issuedMs) > 2 * 60 * 1000) {
+      return NextResponse.json({ error: "Admin authorization expired. Run diagnostics again." }, { status: 401 });
+    }
+
+    const authMessage = `Kodiak Admin Graduation Diagnostics\nWallet: ${wallet}\nMint: ${rawMint}\nIssued At: ${issuedAt}`;
+    if (!verifySolanaMessage(wallet, authMessage, signature)) {
+      return NextResponse.json({ error: "Invalid admin wallet signature." }, { status: 401 });
+    }
     const mintA = new PublicKey(rawMint);
 
     const launchpadPoolId = getPdaLaunchpadPoolId(

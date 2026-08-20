@@ -67,6 +67,18 @@ type Diagnostics = {
     cancelled: boolean;
     cpmmReady: boolean;
   };
+  migrationHealth: {
+    phase: "bonding" | "ready_pending" | "graduated_waiting_cpmm" | "cpmm_live" | "cancelled" | "unknown";
+    transitionPending: boolean;
+    attentionRecommended: boolean;
+    transitionAgeSeconds: number | null;
+    latestLaunchpadSignature: string | null;
+    latestLaunchpadFailed: boolean;
+    recentFailedSignature: string | null;
+    tradingLocked: boolean;
+    summary: string;
+    nextAction: string;
+  };
   checks: DiagnosticCheck[];
   transactions: {
     launchpadPool: DiagnosticTx[];
@@ -203,6 +215,57 @@ export function GraduationDiagnostics() {
             <StateBadge label="CPMM ready" active={data.trading.cpmmReady} />
           </div>
 
+          <div className={`rounded-2xl border p-4 ${
+            data.migrationHealth.attentionRecommended
+              ? "border-rose-400/25 bg-rose-400/[0.05]"
+              : data.migrationHealth.transitionPending
+                ? "border-amber-300/25 bg-amber-300/[0.04]"
+                : data.migrationHealth.phase === "cpmm_live"
+                  ? "border-emerald-400/25 bg-emerald-400/[0.04]"
+                  : "border-white/10 bg-black/25"
+          }`}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.15em] text-zinc-500">Migration / recovery state</p>
+                <p className="mt-1 text-lg font-black text-zinc-100">{data.migrationHealth.phase.replaceAll("_", " ")}</p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-black ${
+                data.migrationHealth.tradingLocked
+                  ? "bg-rose-400/10 text-rose-300"
+                  : "bg-emerald-400/10 text-emerald-300"
+              }`}>
+                {data.migrationHealth.tradingLocked ? "TRADING LOCKED" : "TRADING PATH VALID"}
+              </span>
+            </div>
+            <p className="mt-3 text-sm leading-6 text-zinc-300">{data.migrationHealth.summary}</p>
+            <div className="mt-3 rounded-xl border border-white/5 bg-black/25 p-3">
+              <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-200">Next action</p>
+              <p className="mt-1 text-xs leading-5 text-zinc-500">{data.migrationHealth.nextAction}</p>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-zinc-600">
+              <span>Pending: {String(data.migrationHealth.transitionPending)}</span>
+              <span>Attention: {String(data.migrationHealth.attentionRecommended)}</span>
+              <span>Age: {data.migrationHealth.transitionAgeSeconds === null ? "unknown" : `${Math.floor(data.migrationHealth.transitionAgeSeconds / 60)} min`}</span>
+            </div>
+            {data.migrationHealth.latestLaunchpadSignature && (
+              <p className="mt-2 break-all text-xs text-zinc-600">
+                Latest LaunchLab tx: {" "}
+                <a className="font-bold text-amber-200 hover:underline" href={explorerUrl(data.migrationHealth.latestLaunchpadSignature, data.network)} target="_blank" rel="noreferrer">
+                  {short(data.migrationHealth.latestLaunchpadSignature)}
+                </a>
+                {data.migrationHealth.latestLaunchpadFailed ? " (failed)" : ""}
+              </p>
+            )}
+            {data.migrationHealth.recentFailedSignature && data.migrationHealth.recentFailedSignature !== data.migrationHealth.latestLaunchpadSignature && (
+              <p className="mt-2 break-all text-xs text-rose-300">
+                Recent failed tx: {" "}
+                <a className="font-bold hover:underline" href={explorerUrl(data.migrationHealth.recentFailedSignature, data.network)} target="_blank" rel="noreferrer">
+                  {short(data.migrationHealth.recentFailedSignature)}
+                </a>
+              </p>
+            )}
+          </div>
+
           <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
             <div className="flex items-center justify-between gap-4">
               <div>
@@ -225,7 +288,7 @@ export function GraduationDiagnostics() {
               {data.checks.map((check) => (
                 <div key={check.id} className={`rounded-2xl border p-4 ${check.pass ? "border-emerald-400/15 bg-emerald-400/[0.03]" : "border-rose-400/20 bg-rose-400/[0.04]"}`}>
                   <p className={`text-sm font-black ${check.pass ? "text-emerald-300" : "text-rose-300"}`}>
-                    {check.pass ? "PASS" : "ATTENTION"} Â· {check.label}
+                    {check.pass ? "PASS" : "ATTENTION"} | {check.label}
                   </p>
                   <p className="mt-2 break-all text-xs leading-5 text-zinc-500">{check.detail}</p>
                 </div>
@@ -256,7 +319,7 @@ export function GraduationDiagnostics() {
                 {data.cpmm.candidates.map((candidate) => (
                   <div key={candidate.address} className="rounded-xl border border-white/5 bg-white/[0.02] p-3 text-xs">
                     <p className="break-all font-bold text-zinc-300">{candidate.address}</p>
-                    <p className="mt-1 text-zinc-600">exists: {String(candidate.exists)} Â· owner matches: {String(candidate.ownerMatches)}</p>
+                    <p className="mt-1 text-zinc-600">exists: {String(candidate.exists)} | owner matches: {String(candidate.ownerMatches)}</p>
                   </div>
                 ))}
                 {!data.cpmm.candidates.length && <p className="text-xs text-zinc-600">CPMM candidates become available when the PlatformConfig can be decoded.</p>}
@@ -290,7 +353,7 @@ function TransactionList({ title, transactions, network }: { title: string; tran
                   <a href={explorerUrl(tx.signature, network)} target="_blank" rel="noreferrer" className="font-black text-amber-200 hover:underline" onClick={(event) => event.stopPropagation()}>
                     {short(tx.signature)}
                   </a>
-                  <p className="mt-1 text-xs text-zinc-600">slot {tx.slot}{tx.blockTime ? ` Â· ${new Date(tx.blockTime * 1000).toLocaleString()}` : ""}</p>
+                  <p className="mt-1 text-xs text-zinc-600">slot {tx.slot}{tx.blockTime ? ` | ${new Date(tx.blockTime * 1000).toLocaleString()}` : ""}</p>
                 </div>
                 <span className={`rounded-full px-3 py-1 text-xs font-black ${tx.err ? "bg-rose-400/10 text-rose-300" : "bg-emerald-400/10 text-emerald-300"}`}>
                   {tx.err ? "FAILED" : tx.confirmationStatus?.toUpperCase() || "CONFIRMED"}

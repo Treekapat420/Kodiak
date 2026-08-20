@@ -18,9 +18,12 @@ export function GlobalNav() {
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
         <Link
           href="/"
-          className="shrink-0 text-lg font-black tracking-tight text-white"
+          className="flex shrink-0 items-center gap-2 text-lg font-black tracking-tight text-white"
         >
-          Kodiak
+          <span>Kodiak</span>
+          <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-amber-200">
+            Beta
+          </span>
         </Link>
 
         <nav className="flex max-w-full items-center gap-2 overflow-x-auto">

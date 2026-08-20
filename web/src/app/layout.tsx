@@ -18,7 +18,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Kodiak | Solana Launchpad",
   description:
-    "Kodiak - a creator-first Solana token launchpad powered by Raydium LaunchLab.",
+    "Kodiak public beta - a creator-first Solana token launchpad powered by Raydium LaunchLab.",
 };
 
 export default function RootLayout({

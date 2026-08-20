@@ -13,6 +13,7 @@ import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { NATIVE_MINT } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
+import { classifyKodiakFailure } from "@/lib/transactionFailure";
 import {
   KODIAK_LAUNCHPAD_PROGRAM_ID,
   loadKodiakRaydium,
@@ -67,7 +68,7 @@ type Status =
   | { kind: "idle"; message: string }
   | { kind: "working"; message: string }
   | { kind: "success"; message: string; signature?: string }
-  | { kind: "error"; message: string; logs?: string[] };
+  | { kind: "error"; message: string; logs?: string[]; code?: string; action?: string; technical?: string };
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const TRADE_SLIPPAGE = new BN(100);
@@ -1684,16 +1685,17 @@ export default function TradePage() {
           lamports,
         });
       } catch (error) {
+        const failure = classifyKodiakFailure(
+          error,
+          `The ${NETWORK_LABEL} CPMM purchase failed.`,
+        );
         setStatus({
           kind: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : `The ${NETWORK_LABEL} CPMM purchase failed.`,
-          logs:
-            extractLogs(
-              error,
-            ),
+          message: failure.message,
+          action: failure.action,
+          code: failure.code,
+          technical: failure.technical,
+          logs: extractLogs(error),
         });
       }
 
@@ -1842,9 +1844,10 @@ export default function TradePage() {
       if (simulation.value.err) {
         setStatus({
           kind: "error",
-          message: `Buy simulation failed: ${JSON.stringify(
-            simulation.value.err,
-          )}`,
+          message: "Kodiak's safety simulation found a problem, so the wallet transaction was not sent.",
+          action: "Do not keep retrying blindly. If this repeats, send Kodiak support the support code and program logs below.",
+          code: "SIMULATION_FAILED",
+          technical: `Buy simulation failed: ${JSON.stringify(simulation.value.err)}`,
           logs: simulation.value.logs ?? [],
         });
         return;
@@ -1945,17 +1948,20 @@ export default function TradePage() {
         signature,
       });
     } catch (error) {
-      const baseMessage =
-        error instanceof Error
-          ? error.message
-          : `The ${NETWORK_LABEL} purchase failed.`;
+      const failure = classifyKodiakFailure(
+        error,
+        `The ${NETWORK_LABEL} purchase failed.`,
+      );
+      const technical = transactionDiagnosticRef.current
+        ? `${failure.technical} | ${transactionDiagnosticRef.current}`
+        : failure.technical;
 
       setStatus({
         kind: "error",
-        message:
-          transactionDiagnosticRef.current
-            ? `${baseMessage} | ${transactionDiagnosticRef.current}`
-            : baseMessage,
+        message: failure.message,
+        action: failure.action,
+        code: failure.code,
+        technical,
         logs: extractLogs(error),
       });
     }
@@ -2116,16 +2122,17 @@ export default function TradePage() {
           sellNumber,
         });
       } catch (error) {
+        const failure = classifyKodiakFailure(
+          error,
+          `The ${NETWORK_LABEL} CPMM sale failed.`,
+        );
         setStatus({
           kind: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : `The ${NETWORK_LABEL} CPMM sale failed.`,
-          logs:
-            extractLogs(
-              error,
-            ),
+          message: failure.message,
+          action: failure.action,
+          code: failure.code,
+          technical: failure.technical,
+          logs: extractLogs(error),
         });
       }
 
@@ -2166,7 +2173,7 @@ export default function TradePage() {
 
       /*
        * IMPORTANT:
-       * Do not pass minAmountB: new BN(0).
+      * Do not pass minAmountB: new BN(0).
        *
        * Raydium LaunchLab rejects a zero minimum WSOL
        * output. By omitting minAmountB and supplying
@@ -2283,9 +2290,10 @@ export default function TradePage() {
       if (simulation.value.err) {
         setStatus({
           kind: "error",
-          message: `Sell simulation failed: ${JSON.stringify(
-            simulation.value.err,
-          )}`,
+          message: "Kodiak's safety simulation found a problem, so the wallet transaction was not sent.",
+          action: "Do not keep retrying blindly. If this repeats, send Kodiak support the support code and program logs below.",
+          code: "SIMULATION_FAILED",
+          technical: `Sell simulation failed: ${JSON.stringify(simulation.value.err)}`,
           logs: simulation.value.logs ?? [],
         });
         return;
@@ -2394,12 +2402,16 @@ export default function TradePage() {
         signature,
       });
     } catch (error) {
+      const failure = classifyKodiakFailure(
+        error,
+        `The ${NETWORK_LABEL} sale failed.`,
+      );
       setStatus({
         kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : `The ${NETWORK_LABEL} sale failed.`,
+        message: failure.message,
+        action: failure.action,
+        code: failure.code,
+        technical: failure.technical,
         logs: extractLogs(error),
       });
     }
@@ -2883,6 +2895,22 @@ export default function TradePage() {
                 View transaction
               </a>
             )}
+
+          {status.kind === "error" && status.action && (
+            <div className="mt-3 rounded-2xl border border-red-300/15 bg-black/25 p-4">
+              <p className="text-xs font-black uppercase tracking-[0.12em] text-red-200">What to do</p>
+              <p className="mt-2 text-xs leading-5 text-zinc-300">{status.action}</p>
+              {status.code && (
+                <p className="mt-3 font-mono text-[11px] text-zinc-500">Support code: {status.code}</p>
+              )}
+              {status.technical && (
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-xs font-bold text-zinc-400">Technical details</summary>
+                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-5 text-zinc-500">{status.technical}</pre>
+                </details>
+              )}
+            </div>
+          )}
 
           {status.kind === "error" &&
             status.logs &&

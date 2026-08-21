@@ -527,10 +527,13 @@ export async function syncRecentLaunchpadTrades(
       const executionPrice =
         solAmount / tokenAmount;
 
+      const previousTrade =
+        workingTrades.at(-1);
       const previousClose =
         validPrice(
-          workingTrades.at(-1)
-            ?.closePriceSol,
+          previousTrade?.marketType === "cpmm"
+            ? previousTrade.closePriceSol
+            : previousTrade?.priceSol,
         );
       const inferredOpen =
         validPrice(inferred.openPriceSol);
@@ -538,21 +541,28 @@ export async function syncRecentLaunchpadTrades(
         validPrice(inferred.closePriceSol);
 
       /*
-       * CPMM has authoritative transaction-local pre/post reserve prices.
-       * LaunchLab keeps the previous verified close as its candle open so
-       * virtual-curve candles remain continuous.
+       * A normal Solana RPC cannot return historical LaunchpadPool account
+       * bytes for an arbitrary transaction slot. For LaunchLab, use the
+       * verified transaction execution price as the historical chart print.
+       * CPMM still has exact pre/post reserve ratios inside the transaction.
        */
       const openPriceSol =
         inferred.marketType === "cpmm"
           ? inferredOpen
-          : previousClose ?? inferredOpen;
+          : previousClose ?? inferredOpen ?? executionPrice;
 
-      const directionMatches =
-        openPriceSol && inferredClose
-          ? identity.side === "buy"
-            ? inferredClose > openPriceSol
-            : inferredClose < openPriceSol
-          : false;
+      const closePriceSol =
+        inferred.marketType === "cpmm"
+          ? inferredClose
+          : executionPrice;
+
+      const hasVerifiedCandle =
+        openPriceSol &&
+        closePriceSol &&
+        (inferred.marketType !== "cpmm" ||
+          (identity.side === "buy"
+            ? closePriceSol > openPriceSol
+            : closePriceSol < openPriceSol));
 
       const trade: StoredTrade = {
         mint,
@@ -566,10 +576,11 @@ export async function syncRecentLaunchpadTrades(
           inferred.timestamp ||
           entry.blockTime ||
           Math.floor(Date.now() / 1000),
-        ...(directionMatches
+        marketType: inferred.marketType,
+        ...(hasVerifiedCandle
           ? {
               openPriceSol,
-              closePriceSol: inferredClose,
+              closePriceSol,
             }
           : {}),
       };

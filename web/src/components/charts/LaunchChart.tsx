@@ -258,7 +258,7 @@ export function LaunchChart({ mint }: { mint: string }) {
         setLoading(false);
         setMessage(
           nextCandles.length
-            ? `${nextCandles.length} candle${nextCandles.length === 1 ? "" : "s"} Â· live updates every 3 seconds`
+            ? `${nextCandles.length} candle${nextCandles.length === 1 ? "" : "s"} - live updates every 3 seconds`
             : "No trades yet.",
         );
       } catch (error) {
@@ -330,14 +330,35 @@ export function LaunchChart({ mint }: { mint: string }) {
       return best.price;
     }
 
-    return candles.map((candle) => {
+    let previousUsdClose = 0;
+
+    return candles.map((candle, index) => {
       const usd = usdAt(candle.time);
+      const convertedOpen = candle.open * usd;
+      const convertedHigh = candle.high * usd;
+      const convertedLow = candle.low * usd;
+      const convertedClose = candle.close * usd;
+
+      // Sparse-market charts such as Dexscreener visually carry the previous
+      // traded USD close into the next candle. Without that continuity, a
+      // one-trade candle has open === close and renders as a tiny horizontal
+      // dash even when the USD value changed substantially between trades.
+      const open =
+        index > 0 && Number.isFinite(previousUsdClose) && previousUsdClose > 0
+          ? previousUsdClose
+          : convertedOpen;
+      const close = convertedClose;
+      const high = Math.max(open, convertedHigh, close);
+      const low = Math.min(open, convertedLow, close);
+
+      previousUsdClose = close;
+
       return {
         ...candle,
-        open: candle.open * usd,
-        high: candle.high * usd,
-        low: candle.low * usd,
-        close: candle.close * usd,
+        open,
+        high,
+        low,
+        close,
       };
     });
   }, [candles, denomination, solUsd]);

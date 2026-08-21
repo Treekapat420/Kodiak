@@ -30,6 +30,7 @@ export type StoredTrade = {
   openPriceSol?: number;
   closePriceSol?: number;
   timestamp: number;
+  marketType?: "launchpad" | "cpmm";
 };
 
 type InferredTrade = {
@@ -1019,6 +1020,10 @@ export function buildCandles(
   let previousClose = 0;
 
   for (const trade of trades) {
+    const executionPrice = Number(
+      trade.priceSol,
+    );
+
     const storedOpen = Number(
       trade.openPriceSol,
     );
@@ -1027,57 +1032,42 @@ export function buildCandles(
       trade.closePriceSol,
     );
 
+    /*
+     * LaunchLab history cannot be reconstructed by calling getAccountInfo
+     * with minContextSlot. Solana returns an account state AT OR AFTER that
+     * slot, so indexing an older transaction can accidentally attach today's
+     * curve price to yesterday's trade. That was the source of Kodiak's tall
+     * green/red towers.
+     *
+     * The transaction's verified SOL/token execution price is historical and
+     * belongs to that exact swap, so it is the authoritative chart print for
+     * LaunchLab. CPMM trades retain their exact transaction-local post-reserve
+     * spot price when available. Legacy records do not have marketType; those
+     * intentionally fall back to executionPrice so old LaunchLab charts repair
+     * themselves without deleting Redis history.
+     */
+    const eventClose =
+      trade.marketType === "cpmm" &&
+      Number.isFinite(storedClose) &&
+      storedClose > 0
+        ? storedClose
+        : executionPrice;
+
     if (
-      !Number.isFinite(
-        storedClose,
-      ) ||
-      storedClose <= 0
+      !Number.isFinite(eventClose) ||
+      eventClose <= 0
     ) {
       continue;
     }
 
     const eventOpen =
-      Number.isFinite(
-        previousClose,
-      ) &&
+      Number.isFinite(previousClose) &&
       previousClose > 0
         ? previousClose
-        : Number.isFinite(
-              storedOpen,
-            ) &&
+        : Number.isFinite(storedOpen) &&
             storedOpen > 0
           ? storedOpen
-          : 0;
-
-    if (
-      !Number.isFinite(
-        eventOpen,
-      ) ||
-      eventOpen <= 0
-    ) {
-      continue;
-    }
-
-    /*
-     * A LaunchLab bonding-curve buy must move spot price upward.
-     * A sell must move it downward.
-     *
-     * If an old/stale stored record violates that invariant, do not turn it
-     * into a fake candle. New trades are rejected by the POST route before
-     * they can be saved in this state.
-     */
-    const directionIsValid =
-      trade.side === "buy"
-        ? storedClose >
-          eventOpen
-        : storedClose <
-          eventOpen;
-
-    if (
-      !directionIsValid
-    ) {
-      continue;
-    }
+          : eventClose;
 
     const time =
       Math.floor(
@@ -1086,76 +1076,48 @@ export function buildCandles(
       ) *
       intervalSeconds;
 
-    const eventHigh =
-      Math.max(
-        eventOpen,
-        storedClose,
-      );
+    const eventHigh = Math.max(
+      eventOpen,
+      eventClose,
+    );
 
-    const eventLow =
-      Math.min(
-        eventOpen,
-        storedClose,
-      );
+    const eventLow = Math.min(
+      eventOpen,
+      eventClose,
+    );
 
-    const current =
-      buckets.get(time);
+    const current = buckets.get(time);
 
     if (!current) {
-      buckets.set(
+      buckets.set(time, {
         time,
-        {
-          time,
-          open:
-            eventOpen,
-          high:
-            eventHigh,
-          low:
-            eventLow,
-          close:
-            storedClose,
-          volume:
-            Math.abs(
-              Number(
-                trade.solAmount ||
-                  0,
-              ),
-            ),
-        },
-      );
+        open: eventOpen,
+        high: eventHigh,
+        low: eventLow,
+        close: eventClose,
+        volume: Math.abs(
+          Number(trade.solAmount || 0),
+        ),
+      });
     } else {
-      current.high =
-        Math.max(
-          current.high,
-          eventHigh,
-        );
-
-      current.low =
-        Math.min(
-          current.low,
-          eventLow,
-        );
-
-      current.close =
-        storedClose;
-
-      current.volume +=
-        Math.abs(
-          Number(
-            trade.solAmount ||
-              0,
-          ),
-        );
+      current.high = Math.max(
+        current.high,
+        eventHigh,
+      );
+      current.low = Math.min(
+        current.low,
+        eventLow,
+      );
+      current.close = eventClose;
+      current.volume += Math.abs(
+        Number(trade.solAmount || 0),
+      );
     }
 
-    previousClose =
-      storedClose;
+    previousClose = eventClose;
   }
 
-  return [
-    ...buckets.values(),
-  ].sort(
-    (a, b) =>
-      a.time - b.time,
+  return [...buckets.values()].sort(
+    (a, b) => a.time - b.time,
   );
 }

@@ -341,9 +341,9 @@ export async function POST(
     }
 
     const officialClose =
-      Number(
-        inferred.closePriceSol,
-      );
+      inferred.marketType === "cpmm"
+        ? Number(inferred.closePriceSol)
+        : executionPrice;
 
     const inferredOpen =
       Number(
@@ -380,11 +380,11 @@ export async function POST(
         -1,
       );
 
-    const previousClose =
-      Number(
-        previousTrade
-          ?.closePriceSol,
-      );
+    const previousClose = Number(
+      previousTrade?.marketType === "cpmm"
+        ? previousTrade.closePriceSol
+        : previousTrade?.priceSol,
+    );
 
     /*
      * For CPMM, the confirmed transaction itself exposes the exact pre-swap
@@ -425,30 +425,23 @@ export async function POST(
       );
     }
 
-    const directionIsCorrect =
-      side === "buy"
-        ? officialClose >
-          openPriceSol
-        : officialClose <
-          openPriceSol;
+    if (inferred.marketType === "cpmm") {
+      const directionIsCorrect =
+        side === "buy"
+          ? officialClose > openPriceSol
+          : officialClose < openPriceSol;
 
-    if (!directionIsCorrect) {
-      return NextResponse.json(
-        {
-          error:
-            side === "buy"
-              ? "The verification RPC has not caught up to this buy yet. Kodiak will retry rather than record a buy whose spot price does not increase."
-              : "The verification RPC has not caught up to this sell yet. Kodiak will retry rather than record a sell whose spot price does not decrease.",
-          retryable:
-            true,
-          network:
-            KODIAK_NETWORK,
-        },
-        {
-          status:
-            409,
-        },
-      );
+      if (!directionIsCorrect) {
+        return NextResponse.json(
+          {
+            error:
+              "The confirmed CPMM reserve price does not match the swap direction yet. Kodiak will retry.",
+            retryable: true,
+            network: KODIAK_NETWORK,
+          },
+          { status: 409 },
+        );
+      }
     }
 
     const trade:
@@ -472,6 +465,8 @@ export async function POST(
           officialClose,
         timestamp:
           inferred.timestamp,
+        marketType:
+          inferred.marketType,
       };
 
     const saved =

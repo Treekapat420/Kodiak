@@ -1020,72 +1020,37 @@ export function buildCandles(
   let previousClose = 0;
 
   for (const trade of trades) {
-    const executionPrice = Number(
-      trade.priceSol,
-    );
-
-    const storedOpen = Number(
-      trade.openPriceSol,
-    );
-
-    const storedClose = Number(
-      trade.closePriceSol,
-    );
+    const executionPrice = Number(trade.priceSol);
+    const storedOpen = Number(trade.openPriceSol);
+    const storedClose = Number(trade.closePriceSol);
 
     /*
-     * LaunchLab history cannot be reconstructed by calling getAccountInfo
-     * with minContextSlot. Solana returns an account state AT OR AFTER that
-     * slot, so indexing an older transaction can accidentally attach today's
-     * curve price to yesterday's trade. That was the source of Kodiak's tall
-     * green/red towers.
-     *
-     * The transaction's verified SOL/token execution price is historical and
-     * belongs to that exact swap, so it is the authoritative chart print for
-     * LaunchLab. CPMM trades retain their exact transaction-local post-reserve
-     * spot price when available. Legacy records do not have marketType; those
-     * intentionally fall back to executionPrice so old LaunchLab charts repair
-     * themselves without deleting Redis history.
+     * Prefer reconstructed/verified marginal spot prices. LaunchLab trades are
+     * rebuilt from the bonding-curve realA/realB state in market-sync.ts;
+     * CPMM trades carry transaction-local reserve prices. Execution price is
+     * only a last-resort legacy fallback, never the preferred candle close.
      */
     const eventClose =
-      trade.marketType === "cpmm" &&
-      Number.isFinite(storedClose) &&
-      storedClose > 0
+      Number.isFinite(storedClose) && storedClose > 0
         ? storedClose
         : executionPrice;
 
-    if (
-      !Number.isFinite(eventClose) ||
-      eventClose <= 0
-    ) {
+    if (!Number.isFinite(eventClose) || eventClose <= 0) {
       continue;
     }
 
     const eventOpen =
-      Number.isFinite(previousClose) &&
-      previousClose > 0
-        ? previousClose
-        : Number.isFinite(storedOpen) &&
-            storedOpen > 0
-          ? storedOpen
+      Number.isFinite(storedOpen) && storedOpen > 0
+        ? storedOpen
+        : Number.isFinite(previousClose) && previousClose > 0
+          ? previousClose
           : eventClose;
 
     const time =
-      Math.floor(
-        trade.timestamp /
-          intervalSeconds,
-      ) *
-      intervalSeconds;
+      Math.floor(trade.timestamp / intervalSeconds) * intervalSeconds;
 
-    const eventHigh = Math.max(
-      eventOpen,
-      eventClose,
-    );
-
-    const eventLow = Math.min(
-      eventOpen,
-      eventClose,
-    );
-
+    const eventHigh = Math.max(eventOpen, eventClose);
+    const eventLow = Math.min(eventOpen, eventClose);
     const current = buckets.get(time);
 
     if (!current) {
@@ -1095,29 +1060,17 @@ export function buildCandles(
         high: eventHigh,
         low: eventLow,
         close: eventClose,
-        volume: Math.abs(
-          Number(trade.solAmount || 0),
-        ),
+        volume: Math.abs(Number(trade.solAmount || 0)),
       });
     } else {
-      current.high = Math.max(
-        current.high,
-        eventHigh,
-      );
-      current.low = Math.min(
-        current.low,
-        eventLow,
-      );
+      current.high = Math.max(current.high, eventHigh);
+      current.low = Math.min(current.low, eventLow);
       current.close = eventClose;
-      current.volume += Math.abs(
-        Number(trade.solAmount || 0),
-      );
+      current.volume += Math.abs(Number(trade.solAmount || 0));
     }
 
     previousClose = eventClose;
   }
 
-  return [...buckets.values()].sort(
-    (a, b) => a.time - b.time,
-  );
+  return [...buckets.values()].sort((a, b) => a.time - b.time);
 }

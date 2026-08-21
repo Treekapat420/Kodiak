@@ -258,7 +258,7 @@ export function LaunchChart({ mint }: { mint: string }) {
         setLoading(false);
         setMessage(
           nextCandles.length
-            ? `${nextCandles.length} candle${nextCandles.length === 1 ? "" : "s"} ÃÂ· live updates every 3 seconds`
+            ? `${nextCandles.length} candle${nextCandles.length === 1 ? "" : "s"} Â· live updates every 3 seconds`
             : "No trades yet.",
         );
       } catch (error) {

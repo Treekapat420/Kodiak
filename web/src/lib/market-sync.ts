@@ -5,12 +5,15 @@ import {
 import { NATIVE_MINT } from "@solana/spl-token";
 import {
   CREATE_CPMM_POOL_PROGRAM,
+  Curve,
   DEVNET_PROGRAM_ID,
   getCpmmPdaPoolId,
   getPdaLaunchpadPoolId,
+  LaunchpadConfig,
   LaunchpadPool,
   PlatformConfig,
 } from "@raydium-io/raydium-sdk-v2";
+import BN from "bn.js";
 
 import {
   KODIAK_LAUNCHPAD_PROGRAM_ID,
@@ -628,6 +631,126 @@ export async function syncRecentLaunchpadTrades(
   };
 }
 
+async function rebuildLaunchpadSpotPrices(
+  mint: string,
+  trades: StoredTrade[],
+): Promise<StoredTrade[]> {
+  const launchpadIndexes = trades
+    .map((trade, index) => ({ trade, index }))
+    .filter(({ trade }) => trade.marketType !== "cpmm");
+
+  if (launchpadIndexes.length === 0) {
+    return trades;
+  }
+
+  try {
+    const mintKey = new PublicKey(mint);
+    const poolId = getPdaLaunchpadPoolId(
+      KODIAK_LAUNCHPAD_PROGRAM_ID,
+      mintKey,
+      NATIVE_MINT,
+    ).publicKey;
+
+    const poolAccount = await connection.getAccountInfo(
+      poolId,
+      "confirmed",
+    );
+
+    if (!poolAccount) {
+      return trades;
+    }
+
+    const poolInfo = LaunchpadPool.decode(poolAccount.data);
+    const configAccount = await connection.getAccountInfo(
+      poolInfo.configId,
+      "confirmed",
+    );
+
+    if (!configAccount) {
+      return trades;
+    }
+
+    const configInfo = LaunchpadConfig.decode(configAccount.data);
+    const rebuilt = trades.map((trade) => ({ ...trade }));
+
+    /*
+     * Solana's normal RPC cannot fetch arbitrary historical account bytes.
+     * Instead, anchor reconstruction at the pool's exact CURRENT realA/realB
+     * state, then walk Kodiak's confirmed trades backwards. virtualA/virtualB
+     * are fixed curve parameters; realA/realB are the state changed by swaps.
+     * This produces the marginal bonding-curve price before/after each swap,
+     * rather than using average execution price (which caused the alternating
+     * tall green/red candles seen on KMT).
+     */
+    let realA = new BN(poolInfo.realA.toString());
+    let realB = new BN(poolInfo.realB.toString());
+    const tokenScale = 10 ** poolInfo.mintDecimalsA;
+    const quoteScale = 10 ** poolInfo.mintDecimalsB;
+
+    const priceAt = (nextRealA: BN, nextRealB: BN) =>
+      Curve.getPrice({
+        poolInfo: {
+          virtualA: poolInfo.virtualA,
+          virtualB: poolInfo.virtualB,
+          realA: nextRealA,
+          realB: nextRealB,
+        },
+        curveType: configInfo.curveType,
+        decimalA: poolInfo.mintDecimalsA,
+        decimalB: poolInfo.mintDecimalsB,
+      }).toNumber();
+
+    for (let i = launchpadIndexes.length - 1; i >= 0; i -= 1) {
+      const { trade, index } = launchpadIndexes[i];
+      const tokenRaw = new BN(
+        Math.max(0, Math.round(Number(trade.tokenAmount) * tokenScale)).toString(),
+      );
+      const quoteRaw = new BN(
+        Math.max(0, Math.round(Number(trade.solAmount) * quoteScale)).toString(),
+      );
+
+      if (tokenRaw.isZero() || quoteRaw.isZero()) {
+        continue;
+      }
+
+      const closePriceSol = priceAt(realA, realB);
+
+      if (trade.side === "buy") {
+        realA = realA.sub(tokenRaw);
+        realB = realB.sub(quoteRaw);
+      } else {
+        realA = realA.add(tokenRaw);
+        realB = realB.add(quoteRaw);
+      }
+
+      if (realA.isNeg() || realB.isNeg()) {
+        return trades;
+      }
+
+      const openPriceSol = priceAt(realA, realB);
+
+      if (
+        Number.isFinite(openPriceSol) &&
+        Number.isFinite(closePriceSol) &&
+        openPriceSol > 0 &&
+        closePriceSol > 0
+      ) {
+        rebuilt[index] = {
+          ...rebuilt[index],
+          marketType: "launchpad",
+          openPriceSol,
+          closePriceSol,
+        };
+      }
+    }
+
+    return rebuilt;
+  } catch (error) {
+    console.error("Kodiak LaunchLab historical spot reconstruction failed:", error);
+    return trades;
+  }
+}
+
 export async function getSyncedTrades(
   mint: string,
 ) {
@@ -637,8 +760,9 @@ export async function getSyncedTrades(
         mint,
       );
 
-    return (
-      result.trades
+    return rebuildLaunchpadSpotPrices(
+      mint,
+      result.trades,
     );
   } catch (
     error

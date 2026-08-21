@@ -21,6 +21,7 @@ import {
 
 type Interval = "1s" | "1m" | "5m" | "15m" | "1h";
 type Mode = "candles" | "line";
+type Denomination = "SOL" | "USD";
 
 type Candle = {
   time: number;
@@ -49,6 +50,11 @@ type ChartResponse = {
 type TradesResponse = {
   trades?: Trade[];
   error?: string;
+};
+
+type SolUsdPoint = {
+  time: number;
+  price: number;
 };
 
 type Ohlc = {
@@ -207,6 +213,8 @@ export function LaunchChart({ mint }: { mint: string }) {
 
   const [interval, setInterval] = useState<Interval>("1m");
   const [mode, setMode] = useState<Mode>("candles");
+  const [denomination, setDenomination] = useState<Denomination>("SOL");
+  const [solUsd, setSolUsd] = useState<SolUsdPoint[]>([]);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [hovered, setHovered] = useState<Ohlc | null>(null);
@@ -250,7 +258,7 @@ export function LaunchChart({ mint }: { mint: string }) {
         setLoading(false);
         setMessage(
           nextCandles.length
-            ? `${nextCandles.length} candle${nextCandles.length === 1 ? "" : "s"} Â· live updates every 3 seconds`
+            ? `${nextCandles.length} candle${nextCandles.length === 1 ? "" : "s"} ÃÂ· live updates every 3 seconds`
             : "No trades yet.",
         );
       } catch (error) {
@@ -276,6 +284,63 @@ export function LaunchChart({ mint }: { mint: string }) {
       window.clearInterval(timer);
     };
   }, [interval, mint]);
+
+  useEffect(() => {
+    if (denomination !== "USD" || candles.length === 0) return;
+
+    let cancelled = false;
+
+    async function loadSolUsd() {
+      const first = candles[0]?.time ?? Math.floor(Date.now() / 1000);
+      const last = candles.at(-1)?.time ?? first;
+      const from = Math.max(0, first - 3600);
+      const to = Math.max(last + 3600, Math.floor(Date.now() / 1000));
+
+      try {
+        const response = await fetch(`/api/market/sol-usd?from=${from}&to=${to}`, {
+          cache: "no-store",
+        });
+        const payload = (await response.json()) as { prices?: SolUsdPoint[] };
+        if (!response.ok || !payload.prices?.length) {
+          throw new Error("Unable to load SOL/USD history.");
+        }
+        if (!cancelled) setSolUsd(payload.prices);
+      } catch {
+        if (!cancelled) setSolUsd([]);
+      }
+    }
+
+    void loadSolUsd();
+    return () => { cancelled = true; };
+  }, [denomination, candles.length, candles[0]?.time, candles.at(-1)?.time]);
+
+  const displayedCandles = useMemo(() => {
+    if (denomination === "SOL" || solUsd.length === 0) return candles;
+
+    function usdAt(time: number) {
+      let best = solUsd[0];
+      let bestDistance = Math.abs(best.time - time);
+      for (let i = 1; i < solUsd.length; i += 1) {
+        const distance = Math.abs(solUsd[i].time - time);
+        if (distance < bestDistance) {
+          best = solUsd[i];
+          bestDistance = distance;
+        }
+      }
+      return best.price;
+    }
+
+    return candles.map((candle) => {
+      const usd = usdAt(candle.time);
+      return {
+        ...candle,
+        open: candle.open * usd,
+        high: candle.high * usd,
+        low: candle.low * usd,
+        close: candle.close * usd,
+      };
+    });
+  }, [candles, denomination, solUsd]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -457,7 +522,7 @@ export function LaunchChart({ mint }: { mint: string }) {
 
     if (!chart || !candleSeries || !lineSeries || !volumeSeries) return;
 
-    const candleData: BarData[] = candles.map((item) => ({
+    const candleData: BarData[] = displayedCandles.map((item) => ({
       time: asTime(item.time),
       open: item.open,
       high: item.high,
@@ -465,12 +530,12 @@ export function LaunchChart({ mint }: { mint: string }) {
       close: item.close,
     }));
 
-    const lineData: LineData[] = candles.map((item) => ({
+    const lineData: LineData[] = displayedCandles.map((item) => ({
       time: asTime(item.time),
       value: item.close,
     }));
 
-    const volumeData: HistogramData[] = candles.map((item) => ({
+    const volumeData: HistogramData[] = displayedCandles.map((item) => ({
       time: asTime(item.time),
       value: Number(item.volume ?? 0),
       color:
@@ -482,13 +547,13 @@ export function LaunchChart({ mint }: { mint: string }) {
     const previous = previousCandlesRef.current;
     const latestOnly =
       previous.length > 0 &&
-      candles.length >= previous.length &&
-      candles.length <= previous.length + 1 &&
+      displayedCandles.length >= previous.length &&
+      displayedCandles.length <= previous.length + 1 &&
       previous
         .slice(0, -1)
-        .every((item, index) => sameCandle(item, candles[index]));
+        .every((item, index) => sameCandle(item, displayedCandles[index]));
 
-    if (latestOnly && candles.length > 0) {
+    if (latestOnly && displayedCandles.length > 0) {
       candleSeries.update(candleData[candleData.length - 1]);
       lineSeries.update(lineData[lineData.length - 1]);
       volumeSeries.update(volumeData[volumeData.length - 1]);
@@ -498,11 +563,11 @@ export function LaunchChart({ mint }: { mint: string }) {
       volumeSeries.setData(volumeData);
     }
 
-    previousCandlesRef.current = candles.map((item) => ({ ...item }));
+    previousCandlesRef.current = displayedCandles.map((item) => ({ ...item }));
 
-    if (candles.length > 0) {
+    if (displayedCandles.length > 0) {
       const currentPrice =
-        candles.at(-1)?.close ??
+        displayedCandles.at(-1)?.close ??
         0;
 
       const seriesPriceFormat =
@@ -523,7 +588,7 @@ export function LaunchChart({ mint }: { mint: string }) {
       if (!fittedRef.current) {
         const window =
           chartWindow(
-            candles.length,
+            displayedCandles.length,
             expanded,
           );
 
@@ -560,7 +625,7 @@ export function LaunchChart({ mint }: { mint: string }) {
           true;
       }
     }
-  }, [candles, expanded]);
+  }, [displayedCandles, expanded]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -573,11 +638,11 @@ export function LaunchChart({ mint }: { mint: string }) {
     };
   }, [expanded]);
 
-  const latest = candles.at(-1);
+  const latest = displayedCandles.at(-1);
 
   const metrics = useMemo(() => {
-    const first = candles[0];
-    const last = candles.at(-1);
+    const first = displayedCandles[0];
+    const last = displayedCandles.at(-1);
     const price = last?.close ?? 0;
     const start = first?.open ?? price;
 
@@ -588,7 +653,7 @@ export function LaunchChart({ mint }: { mint: string }) {
           ? ((price - start) / start) * 100
           : 0,
     };
-  }, [candles]);
+  }, [displayedCandles]);
 
   const display = hovered ?? {
     open: latest?.open ?? 0,
@@ -664,7 +729,7 @@ export function LaunchChart({ mint }: { mint: string }) {
 
             {metrics.price > 0 && (
               <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-xs font-black text-emerald-300">
-                {formatPrice(metrics.price)} SOL
+                {denomination === "USD" ? "$" : ""}{formatPrice(metrics.price)} {denomination}
               </span>
             )}
 
@@ -684,6 +749,21 @@ export function LaunchChart({ mint }: { mint: string }) {
         </div>
 
         <div className="flex flex-wrap gap-2">
+          <div className="flex rounded-xl border border-white/10 p-1">
+            {(["SOL", "USD"] as Denomination[]).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setDenomination(value)}
+                className={`rounded-lg px-3 py-2 text-xs font-black ${
+                  denomination === value ? "bg-emerald-400 text-black" : "text-zinc-400"
+                }`}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
+
           <div className="flex rounded-xl border border-white/10 p-1">
             <button
               type="button"
@@ -746,10 +826,10 @@ export function LaunchChart({ mint }: { mint: string }) {
       </div>
 
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-bold text-zinc-400">
-        <span>O {formatPrice(display.open)}</span>
-        <span>H {formatPrice(display.high)}</span>
-        <span>L {formatPrice(display.low)}</span>
-        <span>C {formatPrice(display.close)}</span>
+        <span>O {denomination === "USD" ? "$" : ""}{formatPrice(display.open)}</span>
+        <span>H {denomination === "USD" ? "$" : ""}{formatPrice(display.high)}</span>
+        <span>L {denomination === "USD" ? "$" : ""}{formatPrice(display.low)}</span>
+        <span>C {denomination === "USD" ? "$" : ""}{formatPrice(display.close)}</span>
       </div>
 
       <div

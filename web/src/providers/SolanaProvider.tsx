@@ -52,9 +52,11 @@ export function SolanaProvider({
   /*
    * Jupiter Mobile uses Reown / WalletConnect underneath.
    *
-   * Keep this isolated inside Kodiak's existing Solana provider so the rest
-   * of the application can continue using useWallet(), WalletProvider,
-   * signTransaction(), signAllTransactions(), signMessage(), etc.
+   * The native redirect is important for the Capacitor app:
+   * wallet -> approve/sign -> kodiak:// -> Kodiak app.
+   *
+   * The normal HTTPS metadata URL remains Kodiak's public web origin so
+   * browser wallet verification and the existing website remain unchanged.
    */
   const {
     reownAdapter,
@@ -72,6 +74,12 @@ export function SolanaProvider({
           icons: [
             KODIAK_ICON_URL,
           ],
+          redirect: {
+            native:
+              "kodiak://",
+            universal:
+              KODIAK_APP_URL,
+          },
         },
         projectId:
           REOWN_PROJECT_ID,
@@ -95,19 +103,10 @@ export function SolanaProvider({
     useMemo(
       () =>
         [
-          /*
-           * Existing Kodiak adapters.
-           * Phantom's current Safari -> Phantom handoff remains intact.
-           */
           new PhantomWalletAdapter(),
           new SolflareWalletAdapter(),
           new CoinbaseWalletAdapter(),
 
-          /*
-           * WalletConnect/Reown transport plus the explicit Jupiter Mobile
-           * adapter. Filter defensively because these adapters initialize
-           * from a React hook and may briefly be unavailable.
-           */
           reownAdapter,
           jupiterAdapter,
         ].filter(

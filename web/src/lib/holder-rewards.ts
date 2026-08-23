@@ -149,8 +149,8 @@ async function loadEligibleHolders(mint: string): Promise<Holder[]> {
       continue;
     }
 
-    if (amount <= 0n) continue;
-    balances.set(owner, (balances.get(owner) ?? 0n) + amount);
+    if (amount <= BigInt(0)) continue;
+    balances.set(owner, (balances.get(owner) ?? BigInt(0)) + amount);
   }
 
   return Array.from(balances, ([wallet, rawAmount]) => ({ wallet, rawAmount }));
@@ -176,9 +176,9 @@ export async function recordOfficialKodiakHolderRewards(trade: StoredTrade) {
     }
 
     const holders = await loadEligibleHolders(trade.mint);
-    const totalRaw = holders.reduce((sum, holder) => sum + holder.rawAmount, 0n);
+    const totalRaw = holders.reduce((sum, holder) => sum + holder.rawAmount, BigInt(0));
 
-    if (holders.length === 0 || totalRaw <= 0n) {
+    if (holders.length === 0 || totalRaw <= BigInt(0)) {
       await redis.del(marker);
       return null;
     }
@@ -305,7 +305,7 @@ export async function getHolderRewardStatus(mint: string, wallet?: string) {
         } catch {
           return sum;
         }
-      }, 0n)
+      }, BigInt(0))
       .toString();
   }
 
@@ -325,7 +325,7 @@ export async function getHolderRewardStatus(mint: string, wallet?: string) {
     totalClaimedSol: totalClaimedLamports / LAMPORTS_PER_SOL,
     wallet: wallet ?? null,
     tokenBalanceRaw,
-    eligible: Boolean(wallet && BigInt(tokenBalanceRaw) > 0n),
+    eligible: Boolean(wallet && BigInt(tokenBalanceRaw) > BigInt(0)),
     claimableLamports,
     claimableSol: claimableLamports / LAMPORTS_PER_SOL,
     lifetimeClaimedLamports,

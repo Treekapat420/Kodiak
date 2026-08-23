@@ -11,6 +11,7 @@ import {
   getSyncedTrades,
 } from "@/lib/market-sync";
 import { recordCreatorReward } from "@/lib/creator-rewards";
+import { recordOfficialKodiakHolderRewards } from "@/lib/holder-rewards";
 import {
   KODIAK_NETWORK,
 } from "@/lib/solana/network";
@@ -482,6 +483,15 @@ export async function POST(
       console.error(
         "Creator reward ledger write failed:",
         rewardError,
+      );
+    }
+
+    try {
+      await recordOfficialKodiakHolderRewards(saved);
+    } catch (holderRewardError) {
+      console.error(
+        "Official $KODIAK holder reward allocation failed:",
+        holderRewardError,
       );
     }
 

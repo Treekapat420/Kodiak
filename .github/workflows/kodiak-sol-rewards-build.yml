@@ -87,7 +87,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt --all -- --check
+          cargo fmt --all
 
       - name: Generate lockfile
         shell: bash

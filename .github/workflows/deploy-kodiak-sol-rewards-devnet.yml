@@ -1,0 +1,136 @@
+name: Deploy Kodiak SOL Rewards to Devnet
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-devnet:
+    name: Deploy rewards program to Solana Devnet
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    defaults:
+      run:
+        working-directory: solana-rewards
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91.0"
+          components: rustfmt
+
+      - name: Install Agave
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.14/install)"
+
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install Anchor 0.32.1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          cargo install --git https://github.com/coral-xyz/anchor avm --force
+          avm install 0.32.1
+          avm use 0.32.1
+
+          echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
+
+      - name: Restore Devnet deployment keys
+        shell: bash
+        env:
+          DEPLOYER_KEY: ${{ secrets.KODIAK_REWARDS_DEVNET_DEPLOYER_KEY }}
+          PROGRAM_KEY: ${{ secrets.KODIAK_REWARDS_DEVNET_PROGRAM_KEY }}
+        run: |
+          set -euo pipefail
+
+          test -n "$DEPLOYER_KEY"
+          test -n "$PROGRAM_KEY"
+
+          mkdir -p "$HOME/.config/solana"
+          mkdir -p target/deploy
+
+          printf '%s' "$DEPLOYER_KEY" > "$HOME/.config/solana/id.json"
+          printf '%s' "$PROGRAM_KEY" > target/deploy/kodiak_sol_rewards-keypair.json
+
+          chmod 600 "$HOME/.config/solana/id.json"
+          chmod 600 target/deploy/kodiak_sol_rewards-keypair.json
+
+      - name: Verify addresses and Devnet balance
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          solana config set --url devnet
+          solana config set --keypair "$HOME/.config/solana/id.json"
+
+          DEPLOYER="$(solana address)"
+          PROGRAM_ID="$(solana-keygen pubkey target/deploy/kodiak_sol_rewards-keypair.json)"
+
+          echo "Deployer: $DEPLOYER"
+          echo "Program ID: $PROGRAM_ID"
+
+          test "$DEPLOYER" = "4937J2tRmFTq2b4usH2tococxp6StXevF11xryp4sm6k"
+          test "$PROGRAM_ID" = "68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB"
+
+          solana balance
+
+      - name: Build program
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          anchor build
+
+          BUILT_ID="$(solana-keygen pubkey target/deploy/kodiak_sol_rewards-keypair.json)"
+          test "$BUILT_ID" = "68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB"
+
+      - name: Deploy to Devnet
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          solana program deploy \
+            --url devnet \
+            --keypair "$HOME/.config/solana/id.json" \
+            --program-id target/deploy/kodiak_sol_rewards-keypair.json \
+            target/deploy/kodiak_sol_rewards.so
+
+      - name: Verify deployed program
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          solana program show \
+            --url devnet \
+            68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB
+
+          {
+            echo "## Kodiak SOL Rewards Devnet Deployment"
+            echo ""
+            echo "**Program ID:** \`68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB\`"
+            echo ""
+            echo "**Deployer:** \`4937J2tRmFTq2b4usH2tococxp6StXevF11xryp4sm6k\`"
+            echo ""
+            echo "Deployment and on-chain verification completed."
+          } >> "$GITHUB_STEP_SUMMARY"

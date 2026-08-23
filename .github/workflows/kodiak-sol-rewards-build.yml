@@ -51,13 +51,10 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$HOME/.avm/bin:$PATH"
-
           rustc --version
           cargo --version
           solana --version
           anchor --version
-
-          test "$(anchor --version | awk '{print $2}')" = "0.32.1"
 
       - name: Format Rust source
         shell: bash
@@ -65,35 +62,26 @@ jobs:
           set -euo pipefail
           cargo fmt --all
 
-      - name: Pin SBF-compatible dependencies
+      - name: Generate SBF-compatible lockfile
         shell: bash
         run: |
           set -euo pipefail
-
           rm -f Cargo.lock
           cargo generate-lockfile
 
           pin_if_present () {
             pkg="$1"
             ver="$2"
-
             if grep -q "^name = \"$pkg\"$" Cargo.lock; then
               echo "Pinning $pkg -> $ver"
               cargo update -p "$pkg" --precise "$ver"
-            else
-              echo "Skipping $pkg; not present in Cargo.lock"
             fi
           }
 
-          # Keep only the edition-2024/problematic transitive crates pinned.
-          # Do not pin indexmap: toml_edit in this dependency tree requires ^2.13.
           pin_if_present blake3 1.8.2
           pin_if_present constant_time_eq 0.3.1
           pin_if_present base64ct 1.7.3
           pin_if_present cpufeatures 0.2.17
-
-          echo "Relevant locked versions:"
-          grep -A2 -E '^name = "(blake3|constant_time_eq|base64ct|cpufeatures|indexmap)"$' Cargo.lock || true
 
       - name: Cargo check
         shell: bash

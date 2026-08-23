@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use solana_program::hash::hashv;
+use sha2::{Digest, Sha256};
 use anchor_lang::system_program::{self, Transfer};
 
 declare_id!("11111111111111111111111111111111");
@@ -476,14 +476,21 @@ pub enum RewardsError {
     InvalidAuthority,
 }
 
+fn hash_parts(parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
 fn reward_leaf(epoch_id: u64, wallet: &Pubkey, amount: u64) -> [u8; 32] {
-    hashv(&[
+    hash_parts(&[
         LEAF_DOMAIN,
         &epoch_id.to_le_bytes(),
         wallet.as_ref(),
         &amount.to_le_bytes(),
     ])
-    .to_bytes()
 }
 
 fn verify_merkle_proof(
@@ -495,9 +502,9 @@ fn verify_merkle_proof(
 
     for sibling in proof {
         let next = if current <= *sibling {
-            hashv(&[&current, sibling]).to_bytes()
+            hash_parts(&[&current, sibling])
         } else {
-            hashv(&[sibling, &current]).to_bytes()
+            hash_parts(&[sibling, &current])
         };
         current = next;
     }
@@ -511,9 +518,9 @@ mod tests {
 
     fn combine(a: [u8; 32], b: [u8; 32]) -> [u8; 32] {
         if a <= b {
-            hashv(&[&a, &b]).to_bytes()
+            hash_parts(&[&a, &b])
         } else {
-            hashv(&[&b, &a]).to_bytes()
+            hash_parts(&[&b, &a])
         }
     }
 

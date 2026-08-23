@@ -567,7 +567,7 @@ export async function publishPendingRewardsEpoch(
     }
 
     const walletRows =
-      await redis.smembers<string>(
+      await redis.smembers<string[]>(
         pendingWalletsKey(mintString),
       );
 

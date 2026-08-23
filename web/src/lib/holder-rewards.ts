@@ -60,6 +60,10 @@ function pendingKey(mint: string, wallet: string) {
   return `${rewardPrefix(mint)}:pending:${wallet}`;
 }
 
+function pendingWalletsKey(mint: string) {
+  return `${rewardPrefix(mint)}:pending-wallets`;
+}
+
 function claimedKey(mint: string, wallet: string) {
   return `${rewardPrefix(mint)}:claimed:${wallet}`;
 }
@@ -209,7 +213,14 @@ export async function recordOfficialKodiakHolderRewards(trade: StoredTrade) {
 
     for (const allocation of allocations) {
       if (allocation.lamports > 0) {
-        pipeline.incrby(pendingKey(trade.mint, allocation.wallet), allocation.lamports);
+        pipeline.incrby(
+          pendingKey(trade.mint, allocation.wallet),
+          allocation.lamports,
+        );
+        pipeline.sadd(
+          pendingWalletsKey(trade.mint),
+          allocation.wallet,
+        );
       }
     }
 

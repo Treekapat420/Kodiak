@@ -29,6 +29,8 @@ const CLAIM_SEED = Buffer.from("claim");
 const LEAF_DOMAIN = Buffer.from("kodiak-sol-rewards-v1");
 
 const MAX_BATCH_WALLETS = 128;
+const PUBLISH_LOCK_SECONDS = 180;
+const INFLIGHT_UNCERTAIN_MS = 120_000;
 
 const connection = new Connection(
   process.env.SOLANA_DEVNET_RPC_URL?.trim() ||
@@ -162,6 +164,7 @@ type ActiveClaim = {
 type PublishInflight = {
   epochId: string;
   mint: string;
+  createdAt: number;
   signature?: string;
   allocations: Array<{
     wallet: string;
@@ -380,78 +383,304 @@ export async function getOnchainRewardsStatus(
 }
 
 
+async function releasePublishLock(
+  mint: string,
+  token: string,
+) {
+  const redis = getRedis();
+
+  const script = `
+    if redis.call("GET", KEYS[1]) == ARGV[1] then
+      return redis.call("DEL", KEYS[1])
+    end
+    return 0
+  `;
+
+  await redis.eval(
+    script,
+    [publishLockKey(mint)],
+    [token],
+  );
+}
+
+async function reserveInflightRewards(
+  inflight: PublishInflight,
+) {
+  const redis = getRedis();
+
+  const pendingKeys =
+    inflight.allocations.map(
+      (allocation) =>
+        pendingKey(
+          inflight.mint,
+          allocation.wallet,
+        ),
+    );
+
+  const script = `
+    if redis.call("EXISTS", KEYS[1]) == 1 then
+      return 0
+    end
+
+    local count = tonumber(ARGV[2])
+
+    for i = 1, count do
+      local pending = tonumber(redis.call("GET", KEYS[i + 1]) or "0")
+      local amount = tonumber(ARGV[i + 2])
+
+      if pending < amount then
+        return -i
+      end
+    end
+
+    for i = 1, count do
+      redis.call("INCRBY", KEYS[i + 1], -tonumber(ARGV[i + 2]))
+    end
+
+    redis.call("SET", KEYS[1], ARGV[1])
+    return 1
+  `;
+
+  const result = await redis.eval(
+    script,
+    [
+      publishInflightKey(
+        inflight.mint,
+      ),
+      ...pendingKeys,
+    ],
+    [
+      JSON.stringify(inflight),
+      String(
+        inflight.allocations.length,
+      ),
+      ...inflight.allocations.map(
+        (allocation) =>
+          String(allocation.amount),
+      ),
+    ],
+  );
+
+  const code = Number(result);
+
+  if (code === 0) {
+    throw new Error(
+      "Another rewards epoch is already reserved for publication.",
+    );
+  }
+
+  if (code < 0) {
+    throw new Error(
+      "Pending reward balances changed while the epoch was being prepared. Retry publication.",
+    );
+  }
+}
+
+async function persistInflightSignature(
+  inflight: PublishInflight,
+) {
+  await getRedis().set(
+    publishInflightKey(
+      inflight.mint,
+    ),
+    inflight,
+  );
+}
+
+async function epochExistsForInflight(
+  inflight: PublishInflight,
+) {
+  const mint =
+    new PublicKey(inflight.mint);
+
+  const epoch = pdas(
+    mint,
+    BigInt(inflight.epochId),
+  ).epoch;
+
+  if (!epoch) {
+    return false;
+  }
+
+  const info =
+    await connection.getAccountInfo(
+      epoch,
+      "confirmed",
+    );
+
+  return Boolean(
+    info &&
+      info.owner.equals(
+        PROGRAM_ID,
+      ),
+  );
+}
+
+
 async function finalizePublishedEpoch(
   inflight: PublishInflight,
 ) {
   const redis = getRedis();
-  const pipeline = redis.pipeline();
 
-  for (const allocation of inflight.allocations) {
-    const active: ActiveClaim = {
-      epochId: inflight.epochId,
-      amount: allocation.amount,
-      epoch: allocation.epoch,
-      receipt: allocation.receipt,
-      proof: allocation.proof,
-    };
-
-    pipeline.rpush(
-      activeClaimsKey(
-        inflight.mint,
-        allocation.wallet,
-      ),
-      active,
+  const claimKeys =
+    inflight.allocations.map(
+      (allocation) =>
+        activeClaimsKey(
+          inflight.mint,
+          allocation.wallet,
+        ),
     );
-  }
 
-  pipeline.del(
-    publishInflightKey(
-      inflight.mint,
-    ),
+  const activeClaims =
+    inflight.allocations.map(
+      (allocation) =>
+        JSON.stringify({
+          epochId:
+            inflight.epochId,
+          amount:
+            allocation.amount,
+          epoch:
+            allocation.epoch,
+          receipt:
+            allocation.receipt,
+          proof:
+            allocation.proof,
+        } satisfies ActiveClaim),
+    );
+
+  const script = `
+    local raw = redis.call("GET", KEYS[1])
+
+    if not raw then
+      return 0
+    end
+
+    local current = cjson.decode(raw)
+
+    if tostring(current["epochId"]) ~= ARGV[1] then
+      return -1
+    end
+
+    local count = tonumber(ARGV[2])
+
+    for i = 1, count do
+      redis.call("RPUSH", KEYS[i + 1], ARGV[i + 2])
+    end
+
+    redis.call("DEL", KEYS[1])
+    return 1
+  `;
+
+  const result = await redis.eval(
+    script,
+    [
+      publishInflightKey(
+        inflight.mint,
+      ),
+      ...claimKeys,
+    ],
+    [
+      inflight.epochId,
+      String(
+        activeClaims.length,
+      ),
+      ...activeClaims,
+    ],
   );
 
-  await pipeline.exec();
+  const code = Number(result);
+
+  if (code < 0) {
+    throw new Error(
+      "Rewards inflight epoch changed before finalization.",
+    );
+  }
 }
 
 async function restoreInflightRewards(
   inflight: PublishInflight,
 ) {
   const redis = getRedis();
-  const pipeline = redis.pipeline();
 
-  for (const allocation of inflight.allocations) {
-    pipeline.incrby(
-      pendingKey(
-        inflight.mint,
-        allocation.wallet,
-      ),
-      allocation.amount,
+  const pendingKeys =
+    inflight.allocations.map(
+      (allocation) =>
+        pendingKey(
+          inflight.mint,
+          allocation.wallet,
+        ),
     );
 
-    pipeline.sadd(
+  const script = `
+    local raw = redis.call("GET", KEYS[1])
+
+    if not raw then
+      return 0
+    end
+
+    local current = cjson.decode(raw)
+
+    if tostring(current["epochId"]) ~= ARGV[1] then
+      return -1
+    end
+
+    local count = tonumber(ARGV[2])
+
+    for i = 1, count do
+      redis.call("INCRBY", KEYS[i + 1], tonumber(ARGV[i + 2]))
+      redis.call("SADD", KEYS[count + 2], ARGV[count + i + 2])
+    end
+
+    redis.call("DEL", KEYS[1])
+    return 1
+  `;
+
+  const result = await redis.eval(
+    script,
+    [
+      publishInflightKey(
+        inflight.mint,
+      ),
+      ...pendingKeys,
       pendingWalletsKey(
         inflight.mint,
       ),
-      allocation.wallet,
-    );
-  }
-
-  pipeline.del(
-    publishInflightKey(
-      inflight.mint,
-    ),
+    ],
+    [
+      inflight.epochId,
+      String(
+        inflight.allocations.length,
+      ),
+      ...inflight.allocations.map(
+        (allocation) =>
+          String(allocation.amount),
+      ),
+      ...inflight.allocations.map(
+        (allocation) =>
+          allocation.wallet,
+      ),
+    ],
   );
 
-  await pipeline.exec();
+  const code = Number(result);
+
+  if (code < 0) {
+    throw new Error(
+      "Rewards inflight epoch changed before restoration.",
+    );
+  }
 }
 
 async function reconcileInflightPublish(
   mintString: string,
 ) {
   const redis = getRedis();
+
   const inflight =
     await redis.get<PublishInflight>(
-      publishInflightKey(mintString),
+      publishInflightKey(
+        mintString,
+      ),
     );
 
   if (!inflight) {
@@ -460,7 +689,42 @@ async function reconcileInflightPublish(
     } as const;
   }
 
+  const onchainEpochExists =
+    await epochExistsForInflight(
+      inflight,
+    );
+
+  if (onchainEpochExists) {
+    await finalizePublishedEpoch(
+      inflight,
+    );
+
+    return {
+      reconciled: true,
+      status: "finalized-from-chain",
+    } as const;
+  }
+
+  const ageMs =
+    Math.max(
+      0,
+      Date.now() -
+        Number(
+          inflight.createdAt ?? 0,
+        ),
+    );
+
   if (!inflight.signature) {
+    if (
+      ageMs <
+      INFLIGHT_UNCERTAIN_MS
+    ) {
+      return {
+        reconciled: false,
+        status: "broadcast-uncertain",
+      } as const;
+    }
+
     await restoreInflightRewards(
       inflight,
     );
@@ -479,16 +743,10 @@ async function reconcileInflightPublish(
       },
     );
 
-  const value = status.value;
+  const value =
+    status.value;
 
-  if (!value) {
-    return {
-      reconciled: false,
-      status: "confirmation-pending",
-    } as const;
-  }
-
-  if (value.err) {
+  if (value?.err) {
     await restoreInflightRewards(
       inflight,
     );
@@ -500,9 +758,9 @@ async function reconcileInflightPublish(
   }
 
   if (
-    value.confirmationStatus ===
+    value?.confirmationStatus ===
       "confirmed" ||
-    value.confirmationStatus ===
+    value?.confirmationStatus ===
       "finalized"
   ) {
     await finalizePublishedEpoch(
@@ -515,9 +773,26 @@ async function reconcileInflightPublish(
     } as const;
   }
 
+  if (
+    ageMs <
+    INFLIGHT_UNCERTAIN_MS
+  ) {
+    return {
+      reconciled: false,
+      status: "confirmation-pending",
+    } as const;
+  }
+
+  // After the uncertainty window, the epoch PDA is
+  // still absent and the transaction is not confirmed.
+  // At this point the reservation can be restored.
+  await restoreInflightRewards(
+    inflight,
+  );
+
   return {
-    reconciled: false,
-    status: "confirmation-pending",
+    reconciled: true,
+    status: "restored-expired",
   } as const;
 }
 
@@ -533,12 +808,15 @@ export async function publishPendingRewardsEpoch(
 
   const redis = getRedis();
 
+  const lockToken =
+    crypto.randomUUID();
+
   const lock = await redis.set(
     publishLockKey(mintString),
-    String(Date.now()),
+    lockToken,
     {
       nx: true,
-      ex: 60,
+      ex: PUBLISH_LOCK_SECONDS,
     },
   );
 
@@ -557,8 +835,12 @@ export async function publishPendingRewardsEpoch(
 
     if (
       "status" in reconciliation &&
-      reconciliation.status ===
-        "confirmation-pending"
+      (
+        reconciliation.status ===
+          "confirmation-pending" ||
+        reconciliation.status ===
+          "broadcast-uncertain"
+      )
     ) {
       return {
         published: false,
@@ -798,39 +1080,17 @@ export async function publishPendingRewardsEpoch(
         epochId.toString(),
       mint:
         mintString,
+      createdAt:
+        Date.now(),
       allocations:
         inflightAllocations,
     };
 
-    // Reserve the exact amounts before broadcasting.
-    // If broadcasting never happens, reconciliation
-    // restores them. If broadcasting succeeds but the
-    // server dies before finalization, the durable
-    // inflight record prevents a duplicate epoch.
-    const reservePipeline =
-      redis.pipeline();
-
-    for (
-      const allocation of
-      inflightAllocations
-    ) {
-      reservePipeline.incrby(
-        pendingKey(
-          mintString,
-          allocation.wallet,
-        ),
-        -allocation.amount,
-      );
-    }
-
-    reservePipeline.set(
-      publishInflightKey(
-        mintString,
-      ),
+    // Atomically reserve the exact amounts and persist
+    // the inflight epoch before broadcasting anything.
+    await reserveInflightRewards(
       inflight,
     );
-
-    await reservePipeline.exec();
 
     let publishSignature = "";
 
@@ -847,10 +1107,7 @@ export async function publishPendingRewardsEpoch(
       inflight.signature =
         publishSignature;
 
-      await redis.set(
-        publishInflightKey(
-          mintString,
-        ),
+      await persistInflightSignature(
         inflight,
       );
 
@@ -863,12 +1120,14 @@ export async function publishPendingRewardsEpoch(
         inflight,
       );
     } catch (error) {
-      if (!publishSignature) {
-        await restoreInflightRewards(
-          inflight,
-        );
-      }
-
+      /*
+       * Do not immediately restore a reserved epoch after a
+       * broadcast/confirmation error. A network error can be
+       * ambiguous: Solana may have accepted the transaction even
+       * if this server never received the signature/confirmation.
+       * The durable inflight reconciler checks the epoch PDA and
+       * waits out the uncertainty window before restoring funds.
+       */
       throw error;
     }
 
@@ -886,8 +1145,9 @@ export async function publishPendingRewardsEpoch(
         publishSignature,
     } as const;
   } finally {
-    await redis.del(
-      publishLockKey(mintString),
+    await releasePublishLock(
+      mintString,
+      lockToken,
     );
   }
 }

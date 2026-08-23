@@ -80,7 +80,7 @@ export function SolanaProvider({
             universal:
               KODIAK_APP_URL,
           },
-        },
+        } as any,
         projectId:
           REOWN_PROJECT_ID,
         features: {

@@ -1,0 +1,66 @@
+name: Prepare Kodiak Rewards Devnet Keys
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate-keys:
+    name: Generate Devnet-only deployment keys
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Install Agave
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.14/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Generate Devnet keys
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+
+          mkdir -p devnet-keys
+
+          solana-keygen new \
+            --no-bip39-passphrase \
+            --silent \
+            --force \
+            --outfile devnet-keys/kodiak-rewards-deployer.json
+
+          solana-keygen new \
+            --no-bip39-passphrase \
+            --silent \
+            --force \
+            --outfile devnet-keys/kodiak-sol-rewards-program-keypair.json
+
+          DEPLOYER="$(solana-keygen pubkey devnet-keys/kodiak-rewards-deployer.json)"
+          PROGRAM_ID="$(solana-keygen pubkey devnet-keys/kodiak-sol-rewards-program-keypair.json)"
+
+          printf '%s\n' "$DEPLOYER" > devnet-keys/DEPLOYER_ADDRESS.txt
+          printf '%s\n' "$PROGRAM_ID" > devnet-keys/PROGRAM_ID.txt
+
+          {
+            echo "## Kodiak Rewards Devnet Keys"
+            echo ""
+            echo "**Devnet deployer address:** \`$DEPLOYER\`"
+            echo ""
+            echo "**Rewards program ID:** \`$PROGRAM_ID\`"
+            echo ""
+            echo "Download the private artifact below and keep it private."
+            echo "These keys are DEVNET ONLY and must never be reused on Mainnet."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Devnet key bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodiak-rewards-devnet-keys
+          path: devnet-keys/
+          if-no-files-found: error
+          retention-days: 1

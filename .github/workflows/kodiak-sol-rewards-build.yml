@@ -31,69 +31,84 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Solana + Anchor toolchain
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.89.0"
+          components: rustfmt
+
+      - name: Install Agave 3.1.14
         shell: bash
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
+
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.14/install)"
 
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
 
-          export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$HOME/.avm/bin:$PATH"
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
 
-          avm install 0.32.1
-          avm use 0.32.1
+          solana --version
+          cargo-build-sbf --version || true
 
-      - name: Verify toolchain
+      - name: Install Anchor 0.32.1
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$HOME/.avm/bin:$PATH"
+
+          cargo install --git https://github.com/coral-xyz/anchor avm --force
+          avm install 0.32.1
+          avm use 0.32.1
+
+          echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          anchor --version
+
+      - name: Verify modern SBF toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          echo "Host Rust:"
           rustc --version
           cargo --version
+
+          echo "Agave / Solana:"
           solana --version
+          cargo-build-sbf --version || true
+
+          echo "Anchor:"
           anchor --version
 
       - name: Format Rust source
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt --all
+          cargo fmt --all -- --check
 
-      - name: Generate SBF-compatible lockfile
+      - name: Generate lockfile
         shell: bash
         run: |
           set -euo pipefail
           rm -f Cargo.lock
           cargo generate-lockfile
 
-          pin_if_present () {
-            pkg="$1"
-            ver="$2"
-            if grep -q "^name = \"$pkg\"$" Cargo.lock; then
-              echo "Pinning $pkg -> $ver"
-              cargo update -p "$pkg" --precise "$ver"
-            fi
-          }
-
-          pin_if_present blake3 1.8.2
-          pin_if_present constant_time_eq 0.3.1
-          pin_if_present base64ct 1.7.3
-          pin_if_present cpufeatures 0.2.17
-
       - name: Cargo check
         shell: bash
         run: |
           set -euo pipefail
-          cargo check --workspace --all-targets --locked
+          cargo check --workspace --all-targets
 
       - name: Anchor build
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$HOME/.avm/bin:$PATH"
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          # Agave 3.1.x uses the modern SBF platform-tools stack.
           anchor build
 
       - name: Show build artifacts

@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use sha2::{Digest, Sha256};
 use anchor_lang::system_program::{self, Transfer};
 
-declare_id!("11111111111111111111111111111111");
+declare_id!("68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB");
 
 const CONFIG_SEED: &[u8] = b"kodiak-rewards";
 const VAULT_SEED: &[u8] = b"vault";

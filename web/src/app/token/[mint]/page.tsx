@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 
 import { LaunchChart } from "@/components/charts/LaunchChart";
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
+import { ClaimSolRewards } from "@/components/rewards/ClaimSolRewards";
 import {
   KODIAK_NETWORK,
   kodiakExplorerAddressUrl,
@@ -340,7 +341,7 @@ export default function TokenPage() {
             <div className="min-w-0">
               <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-300">
                 {graduation?.trading.graduated
-                  ? "Kodiak Â· Raydium CPMM"
+                  ? "Kodiak ÃÂ· Raydium CPMM"
                   : "Kodiak LaunchLab"}
                 {" | "}
                 {NETWORK_LABEL}
@@ -446,6 +447,7 @@ export default function TokenPage() {
           </div>
 
           <aside className="space-y-5">
+            <ClaimSolRewards mint={launch.mint} />
             <section className="rounded-3xl border border-emerald-400/20 bg-emerald-400/[0.04] p-5">
               <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">
                 Trade
@@ -638,11 +640,11 @@ export default function TokenPage() {
                   label="Status"
                   value={
                     graduation?.trading.graduated
-                      ? "Verified Â· Graduated"
+                      ? "Verified ÃÂ· Graduated"
                       : graduation?.trading.graduationReady
-                        ? "Verified Â· Graduation ready"
+                        ? "Verified ÃÂ· Graduation ready"
                         : graduation?.trading.cancelled
-                          ? "Verified Â· Cancelled"
+                          ? "Verified ÃÂ· Cancelled"
                           : "Verified launch"
                   }
                 />

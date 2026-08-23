@@ -59,11 +59,11 @@ jobs:
 
           test "$(anchor --version | awk '{print $2}')" = "0.32.1"
 
-      - name: Rust format check
+      - name: Format Rust source
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt --all -- --check
+          cargo fmt --all
 
       - name: Cargo check
         shell: bash

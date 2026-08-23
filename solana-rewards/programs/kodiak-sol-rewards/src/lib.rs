@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::hash::hashv;
+use solana_program::hash::hashv;
 use anchor_lang::system_program::{self, Transfer};
 
 declare_id!("11111111111111111111111111111111");

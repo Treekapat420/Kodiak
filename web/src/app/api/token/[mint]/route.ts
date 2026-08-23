@@ -6,6 +6,7 @@ import {
   KODIAK_NETWORK,
 } from "@/lib/solana/network";
 import { getRedis } from "@/lib/server/redis";
+import { isKodiakArchivedMint } from "@/lib/archived-tokens";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,6 +54,20 @@ export async function GET(
       new PublicKey(
         rawMint,
       ).toBase58();
+
+    if (isKodiakArchivedMint(mint)) {
+      return NextResponse.json(
+        {
+          error:
+            "This archived test token is not publicly available on Kodiak.",
+          network:
+            KODIAK_NETWORK,
+        },
+        {
+          status: 404,
+        },
+      );
+    }
 
     const launch =
       await getRedis().get<LaunchRecord>(

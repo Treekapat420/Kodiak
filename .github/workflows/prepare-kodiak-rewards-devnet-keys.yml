@@ -1,6 +1,11 @@
 name: Prepare Kodiak Rewards Devnet Keys
 
 on:
+  push:
+    branches:
+      - devnet
+    paths:
+      - ".github/workflows/prepare-kodiak-rewards-devnet-keys.yml"
   workflow_dispatch:
 
 permissions:

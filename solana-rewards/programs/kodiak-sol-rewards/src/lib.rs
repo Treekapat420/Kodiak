@@ -1,9 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{
-    hash::hashv,
-    program::invoke_signed,
-    system_instruction,
-};
+use anchor_lang::solana_program::hash::hashv;
+use anchor_lang::system_program::{self, Transfer};
 
 declare_id!("11111111111111111111111111111111");
 
@@ -34,20 +31,17 @@ pub mod kodiak_sol_rewards {
     pub fn deposit(ctx: Context<Deposit>, lamports: u64) -> Result<()> {
         require!(lamports > 0, RewardsError::ZeroAmount);
 
-        let ix = system_instruction::transfer(
-            &ctx.accounts.depositor.key(),
-            &ctx.accounts.vault.key(),
-            lamports,
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.depositor.to_account_info(),
+            to: ctx.accounts.vault.to_account_info(),
+        };
+
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            cpi_accounts,
         );
 
-        anchor_lang::solana_program::program::invoke(
-            &ix,
-            &[
-                ctx.accounts.depositor.to_account_info(),
-                ctx.accounts.vault.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-            ],
-        )?;
+        system_program::transfer(cpi_ctx, lamports)?;
 
         ctx.accounts.config.total_funded = ctx
             .accounts
@@ -163,21 +157,20 @@ pub mod kodiak_sol_rewards {
         let vault_bump = [ctx.accounts.config.vault_bump];
         let vault_seeds: &[&[u8]] = &[VAULT_SEED, config_key.as_ref(), &vault_bump];
 
-        let ix = system_instruction::transfer(
-            &ctx.accounts.vault.key(),
-            &ctx.accounts.claimant.key(),
-            amount,
+        let signer_seeds = &[vault_seeds];
+
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.vault.to_account_info(),
+            to: ctx.accounts.claimant.to_account_info(),
+        };
+
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.system_program.to_account_info(),
+            cpi_accounts,
+            signer_seeds,
         );
 
-        invoke_signed(
-            &ix,
-            &[
-                ctx.accounts.vault.to_account_info(),
-                ctx.accounts.claimant.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-            ],
-            &[vault_seeds],
-        )?;
+        system_program::transfer(cpi_ctx, amount)?;
 
         ctx.accounts.epoch.claimed_rewards = next_claimed;
         ctx.accounts.config.total_claimed = ctx

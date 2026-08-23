@@ -65,18 +65,37 @@ jobs:
           set -euo pipefail
           cargo fmt --all
 
+      - name: Pin SBF-compatible dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -f Cargo.lock
+          cargo generate-lockfile
+
+          # Solana platform-tools currently bundle Cargo 1.84 for SBF builds.
+          # Pin crates that have moved to edition2024 to their last compatible versions.
+          cargo update -p blake3 --precise 1.8.2
+          cargo update -p constant_time_eq --precise 0.3.1
+          cargo update -p base64ct --precise 1.7.3
+          cargo update -p indexmap --precise 2.11.4
+          cargo update -p cpufeatures --precise 0.2.17
+
+          echo "Pinned dependency versions:"
+          grep -A2 -E '^name = "(blake3|constant_time_eq|base64ct|indexmap|cpufeatures)"$' Cargo.lock || true
+
       - name: Cargo check
         shell: bash
         run: |
           set -euo pipefail
-          cargo check --workspace --all-targets
+          cargo check --workspace --all-targets --locked
 
       - name: Anchor build
         shell: bash
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$HOME/.avm/bin:$PATH"
-          anchor build
+          anchor build --locked
 
       - name: Show build artifacts
         if: success()
@@ -94,5 +113,6 @@ jobs:
             solana-rewards/target/deploy/*.so
             solana-rewards/target/idl/*.json
             solana-rewards/target/types/*.ts
+            solana-rewards/Cargo.lock
           if-no-files-found: error
           retention-days: 7

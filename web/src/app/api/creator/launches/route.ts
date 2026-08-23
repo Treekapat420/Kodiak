@@ -19,6 +19,7 @@ import {
   KODIAK_RPC_URL,
 } from "@/lib/solana/network";
 import { getRedis } from "@/lib/server/redis";
+import { isKodiakArchivedMint } from "@/lib/archived-tokens";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -294,7 +295,8 @@ export async function GET(request: NextRequest) {
       (record): record is LaunchRecord =>
         record !== null &&
         record.network === KODIAK_NETWORK &&
-        record.creator === creatorAddress,
+        record.creator === creatorAddress &&
+        !isKodiakArchivedMint(record.mint),
     );
 
     const foundingCreator =

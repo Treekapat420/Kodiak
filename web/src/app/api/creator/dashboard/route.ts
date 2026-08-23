@@ -6,6 +6,7 @@ import {
   recordCreatorReward,
 } from "@/lib/creator-rewards";
 import { getSyncedTrades } from "@/lib/market-sync";
+import { isKodiakArchivedMint } from "@/lib/archived-tokens";
 import {
   KODIAK_IS_DEVNET,
   KODIAK_NETWORK,
@@ -298,7 +299,10 @@ async function creatorLaunches(
     (
       record,
     ): record is LaunchRecord =>
-      record !== null,
+      record !== null &&
+      !isKodiakArchivedMint(
+        record.mint,
+      ),
   );
 }
 

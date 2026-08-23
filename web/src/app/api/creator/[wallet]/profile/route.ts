@@ -6,6 +6,7 @@ import { creatorProfileKey, getCreatorProfileMeta, type CreatorProfileMeta } fro
 import { verifySolanaMessage } from "@/lib/server/verify-solana-signature";
 
 import { getTrades } from "@/lib/devnet-market";
+import { isKodiakArchivedMint } from "@/lib/archived-tokens";
 import {
   KODIAK_IS_DEVNET,
   KODIAK_NETWORK,
@@ -303,7 +304,10 @@ async function loadCreatorLaunches(
     (
       record,
     ): record is LaunchRecord =>
-      record !== null,
+      record !== null &&
+      !isKodiakArchivedMint(
+        record.mint,
+      ),
   );
 }
 

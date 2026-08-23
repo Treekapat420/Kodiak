@@ -12,6 +12,8 @@ export const KODIAK_FEES = {
   totalCurveRate: 0.012,
 
   creatorCurveBps: 45,
+  officialKodiakCreatorRetainedBps: 20,
+  officialKodiakHolderRewardsBps: 25,
   kodiakPlatformBps: 50,
   raydiumProtocolBps: 25,
   totalCurveBps: 120,
@@ -27,6 +29,8 @@ export const KODIAK_FEES = {
 
 export const KODIAK_FEE_LABELS = {
   creatorCurve: "0.45%",
+  officialKodiakCreatorRetained: "0.20%",
+  officialKodiakHolderRewards: "0.25%",
   kodiakPlatform: "0.50%",
   raydiumProtocol: "0.25%",
   totalCurve: "1.20%",

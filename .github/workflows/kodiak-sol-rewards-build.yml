@@ -73,15 +73,27 @@ jobs:
           rm -f Cargo.lock
           cargo generate-lockfile
 
-          # Solana platform-tools currently bundle Cargo 1.84 for SBF builds.
-          # Pin crates that have moved to edition2024 to their last compatible versions.
-          cargo update -p blake3 --precise 1.8.2
-          cargo update -p constant_time_eq --precise 0.3.1
-          cargo update -p base64ct --precise 1.7.3
-          cargo update -p indexmap --precise 2.11.4
-          cargo update -p cpufeatures --precise 0.2.17
+          pin_if_present () {
+            pkg="$1"
+            ver="$2"
 
-          echo "Pinned dependency versions:"
+            if grep -q "^name = \"$pkg\"$" Cargo.lock; then
+              echo "Pinning $pkg -> $ver"
+              cargo update -p "$pkg" --precise "$ver"
+            else
+              echo "Skipping $pkg; not present in Cargo.lock"
+            fi
+          }
+
+          # Solana platform-tools currently use an older Cargo for SBF builds.
+          # Keep transitive crates on versions compatible with that toolchain.
+          pin_if_present blake3 1.8.2
+          pin_if_present constant_time_eq 0.3.1
+          pin_if_present base64ct 1.7.3
+          pin_if_present indexmap 2.11.4
+          pin_if_present cpufeatures 0.2.17
+
+          echo "Relevant locked versions:"
           grep -A2 -E '^name = "(blake3|constant_time_eq|base64ct|indexmap|cpufeatures)"$' Cargo.lock || true
 
       - name: Cargo check

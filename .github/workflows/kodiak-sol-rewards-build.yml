@@ -106,7 +106,7 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$HOME/.avm/bin:$PATH"
-          anchor build --locked
+          anchor build -- --locked
 
       - name: Show build artifacts
         if: success()

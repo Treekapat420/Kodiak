@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - rewards-devnet
       - devnet
+      - rewards-devnet
     paths:
       - "solana-rewards/**"
       - ".github/workflows/kodiak-sol-rewards-build.yml"
@@ -21,7 +21,7 @@ jobs:
   anchor-build:
     name: Compile hardened rewards program
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     defaults:
       run:
@@ -37,7 +37,7 @@ jobs:
           toolchain: "1.91.0"
           components: rustfmt
 
-      - name: Install Agave 3.1.14
+      - name: Install Agave
         shell: bash
         run: |
           set -euo pipefail
@@ -50,7 +50,7 @@ jobs:
           export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
 
           solana --version
-          cargo-build-sbf --version || true
+          cargo-build-sbf --version
 
       - name: Install Anchor 0.32.1
         shell: bash
@@ -62,23 +62,45 @@ jobs:
           avm use 0.32.1
 
           echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
+
           export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
 
           anchor --version
 
-      - name: Verify modern SBF toolchain
+      - name: Force install platform-tools v1.54
         shell: bash
         run: |
           set -euo pipefail
+
           export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
 
-          echo "Host Rust:"
+          rm -rf "$HOME/.cache/solana/v1.54"
+
+          cargo build-sbf \
+            --tools-version v1.54 \
+            --force-tools-install \
+            --manifest-path programs/kodiak-sol-rewards/Cargo.toml
+
+      - name: Verify SBF platform-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          echo "Host:"
           rustc --version
           cargo --version
 
-          echo "Agave / Solana:"
+          echo "Solana:"
           solana --version
-          cargo-build-sbf --version || true
+          cargo-build-sbf --version
+
+          echo "Platform-tools v1.54 bundled Cargo:"
+          "$HOME/.cache/solana/v1.54/platform-tools/rust/bin/cargo" --version || true
+
+          echo "Platform-tools v1.54 bundled Rust:"
+          "$HOME/.cache/solana/v1.54/platform-tools/rust/bin/rustc" --version || true
 
           echo "Anchor:"
           anchor --version
@@ -89,33 +111,30 @@ jobs:
           set -euo pipefail
           cargo fmt --all
 
-      - name: Generate lockfile
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -f Cargo.lock
-          cargo generate-lockfile
-
       - name: Cargo check
         shell: bash
         run: |
           set -euo pipefail
           cargo check --workspace --all-targets
 
-      - name: Anchor build
+      - name: Anchor build using platform-tools v1.54
         shell: bash
         run: |
           set -euo pipefail
+
           export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
 
-          # Agave 3.1.x uses the modern SBF platform-tools stack.
+          # Workspace Cargo.toml pins tools-version = "1.54".
           anchor build
 
       - name: Show build artifacts
         if: success()
         shell: bash
         run: |
+          echo "Deploy artifacts:"
           find target/deploy -maxdepth 1 -type f -print || true
+
+          echo "IDL artifacts:"
           find target/idl -maxdepth 1 -type f -print || true
 
       - name: Upload compiled program and IDL

@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-kodiak_sol_rewards = "11111111111111111111111111111111"
+kodiak_sol_rewards = "68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB"
 
 [programs.devnet]
-kodiak_sol_rewards = "11111111111111111111111111111111"
+kodiak_sol_rewards = "68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB"
 
 [provider]
 cluster = "Devnet"

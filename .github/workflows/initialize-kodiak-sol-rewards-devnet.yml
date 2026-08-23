@@ -1,45 +1,29 @@
-name: Initialize Kodiak SOL Rewards on Devnet
+name: "Initialize Kodiak Rewards Devnet"
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - devnet
-    paths:
-      - ".github/workflows/initialize-kodiak-sol-rewards-devnet.yml"
-  workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
-  initialize-devnet:
-    name: Initialize official KODIAK rewards config
+  initialize:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Node dependencies
-        shell: bash
+      - name: "Install Solana web3"
         run: |
-          set -euo pipefail
-          mkdir -p /tmp/kodiak-rewards-init
-          cd /tmp/kodiak-rewards-init
-          npm init -y >/dev/null 2>&1
-          npm install --silent @solana/web3.js@1.98.4
+          mkdir -p /tmp/kodiak-init
+          cd /tmp/kodiak-init
+          npm init -y
+          npm install @solana/web3.js@1.98.4
 
-      - name: Initialize rewards config
-        shell: bash
+      - name: "Initialize rewards"
         env:
-          KODIAK_REWARDS_DEVNET_DEPLOYER_KEY: ${{ secrets.KODIAK_REWARDS_DEVNET_DEPLOYER_KEY }}
+          DEPLOYER_KEY: ${{ secrets.KODIAK_REWARDS_DEVNET_DEPLOYER_KEY }}
         run: |
-          set -euo pipefail
-
-          test -n "$KODIAK_REWARDS_DEVNET_DEPLOYER_KEY"
-
-          cat > /tmp/kodiak-rewards-init/initialize.mjs <<'NODE'
+          cd /tmp/kodiak-init
+          cat > init.mjs <<'EOF'
+          import crypto from "node:crypto";
           import {
             Connection,
             Keypair,
@@ -47,60 +31,55 @@ jobs:
             SystemProgram,
             Transaction,
             TransactionInstruction,
-            sendAndConfirmTransaction,
+            sendAndConfirmTransaction
           } from "@solana/web3.js";
-          import crypto from "node:crypto";
 
-          const RPC = "https://api.devnet.solana.com";
-          const PROGRAM_ID = new PublicKey("68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB");
-          const OFFICIAL_KODIAK_MINT = new PublicKey("5gKUUuL6iSknoKDpbCNruVDNv2XBHQs1D5MhZs8M5X55");
-          const EXPECTED_DEPLOYER = "4937J2tRmFTq2b4usH2tococxp6StXevF11xryp4sm6k";
+          const connection = new Connection("https://api.devnet.solana.com", "confirmed");
+          const programId = new PublicKey("68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB");
+          const mint = new PublicKey("5gKUUuL6iSknoKDpbCNruVDNv2XBHQs1D5MhZs8M5X55");
+          const expectedAuthority = "4937J2tRmFTq2b4usH2tococxp6StXevF11xryp4sm6k";
 
-          const secretRaw = process.env.KODIAK_REWARDS_DEVNET_DEPLOYER_KEY;
-          if (!secretRaw) throw new Error("Missing deployer key secret.");
-
-          let secret;
-          try {
-            secret = Uint8Array.from(JSON.parse(secretRaw));
-          } catch {
-            throw new Error("Deployer secret must be the JSON keypair array.");
+          if (!process.env.DEPLOYER_KEY) {
+            throw new Error("Missing KODIAK_REWARDS_DEVNET_DEPLOYER_KEY secret");
           }
 
-          const authority = Keypair.fromSecretKey(secret);
-          if (authority.publicKey.toBase58() !== EXPECTED_DEPLOYER) {
-            throw new Error(`Wrong deployer secret: ${authority.publicKey.toBase58()}`);
-          }
-
-          const connection = new Connection(RPC, "confirmed");
-
-          const [configPda] = PublicKey.findProgramAddressSync(
-            [Buffer.from("kodiak-rewards"), OFFICIAL_KODIAK_MINT.toBuffer()],
-            PROGRAM_ID
+          const authority = Keypair.fromSecretKey(
+            Uint8Array.from(JSON.parse(process.env.DEPLOYER_KEY))
           );
 
-          const [vaultPda] = PublicKey.findProgramAddressSync(
-            [Buffer.from("vault"), configPda.toBuffer()],
-            PROGRAM_ID
+          if (authority.publicKey.toBase58() !== expectedAuthority) {
+            throw new Error("The deployer secret does not match the expected Devnet deployer");
+          }
+
+          const [config] = PublicKey.findProgramAddressSync(
+            [Buffer.from("kodiak-rewards"), mint.toBuffer()],
+            programId
+          );
+
+          const [vault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault"), config.toBuffer()],
+            programId
           );
 
           console.log("Authority:", authority.publicKey.toBase58());
-          console.log("Official KODIAK mint:", OFFICIAL_KODIAK_MINT.toBase58());
-          console.log("Rewards program:", PROGRAM_ID.toBase58());
-          console.log("Config PDA:", configPda.toBase58());
-          console.log("Vault PDA:", vaultPda.toBase58());
+          console.log("Program:", programId.toBase58());
+          console.log("Mint:", mint.toBase58());
+          console.log("Config PDA:", config.toBase58());
+          console.log("Vault PDA:", vault.toBase58());
 
-          const existingConfig = await connection.getAccountInfo(configPda, "confirmed");
-          if (existingConfig) {
-            if (!existingConfig.owner.equals(PROGRAM_ID)) {
-              throw new Error(`Config PDA owned by wrong program: ${existingConfig.owner.toBase58()}`);
+          const existing = await connection.getAccountInfo(config);
+
+          if (existing) {
+            if (!existing.owner.equals(programId)) {
+              throw new Error("Config PDA exists but is owned by the wrong program");
             }
-            console.log("Config already initialized.");
+            console.log("SUCCESS: rewards config is already initialized");
             process.exit(0);
           }
 
-          const programInfo = await connection.getAccountInfo(PROGRAM_ID, "confirmed");
-          if (!programInfo || !programInfo.executable) {
-            throw new Error("Rewards program is not executable on Devnet.");
+          const program = await connection.getAccountInfo(programId);
+          if (!program || !program.executable) {
+            throw new Error("Rewards program is not executable on Devnet");
           }
 
           const discriminator = crypto
@@ -109,47 +88,26 @@ jobs:
             .digest()
             .subarray(0, 8);
 
-          const instruction = new TransactionInstruction({
-            programId: PROGRAM_ID,
+          const ix = new TransactionInstruction({
+            programId,
             keys: [
               { pubkey: authority.publicKey, isSigner: true, isWritable: true },
-              { pubkey: OFFICIAL_KODIAK_MINT, isSigner: false, isWritable: false },
-              { pubkey: configPda, isSigner: false, isWritable: true },
-              { pubkey: vaultPda, isSigner: false, isWritable: false },
-              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+              { pubkey: mint, isSigner: false, isWritable: false },
+              { pubkey: config, isSigner: false, isWritable: true },
+              { pubkey: vault, isSigner: false, isWritable: false },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
             ],
-            data: discriminator,
+            data: discriminator
           });
 
           const signature = await sendAndConfirmTransaction(
             connection,
-            new Transaction().add(instruction),
+            new Transaction().add(ix),
             [authority],
-            { commitment: "confirmed", preflightCommitment: "confirmed" }
+            { commitment: "confirmed" }
           );
 
-          console.log("Initialize signature:", signature);
-
-          const configInfo = await connection.getAccountInfo(configPda, "confirmed");
-          if (!configInfo) throw new Error("Config PDA not found after initialization.");
-          if (!configInfo.owner.equals(PROGRAM_ID)) throw new Error("Config PDA has wrong owner.");
-
-          console.log("Kodiak SOL Rewards Devnet configuration initialized successfully.");
-          NODE
-
-          cd /tmp/kodiak-rewards-init
-          node initialize.mjs
-
-      - name: Publish initialization summary
-        if: success()
-        shell: bash
-        run: |
-          {
-            echo "## Kodiak SOL Rewards â Devnet Initialized"
-            echo ""
-            echo "**Program ID:** \`68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB\`"
-            echo ""
-            echo "**Official Devnet KODIAK mint:** \`5gKUUuL6iSknoKDpbCNruVDNv2XBHQs1D5MhZs8M5X55\`"
-            echo ""
-            echo "**Authority:** \`4937J2tRmFTq2b4usH2tococxp6StXevF11xryp4sm6k\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          console.log("SUCCESS: rewards initialized");
+          console.log("Transaction:", signature);
+          EOF
+          node init.mjs

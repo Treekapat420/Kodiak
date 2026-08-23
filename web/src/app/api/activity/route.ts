@@ -4,6 +4,7 @@ import {
   getTrades,
   type StoredTrade,
 } from "@/lib/devnet-market";
+import { isKodiakArchivedMint } from "@/lib/archived-tokens";
 import {
   KODIAK_IS_DEVNET,
   KODIAK_NETWORK,
@@ -297,8 +298,13 @@ export async function GET() {
       await loadLaunchKeys();
 
     const launches =
-      await readLaunches(
+      (await readLaunches(
         keys,
+      )).filter(
+        (launch) =>
+          !isKodiakArchivedMint(
+            launch.mint,
+          ),
       );
 
     const activity:

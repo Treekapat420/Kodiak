@@ -87,16 +87,22 @@ function configuredPlatformId() {
 function statusLabel(
   status: number,
 ) {
+  /*
+   * Raydium LaunchLab PoolStatus:
+   *   0 = Fund    (bonding/funding active)
+   *   1 = Migrate (funding ended; waiting for migration)
+   *   2 = Trade   (migration complete; AMM/CPMM trading enabled)
+   */
   if (status === 0) {
     return "active";
   }
 
   if (status === 1) {
-    return "graduated";
+    return "migrating";
   }
 
   if (status === 2) {
-    return "cancelled";
+    return "graduated";
   }
 
   return "unknown";
@@ -368,7 +374,15 @@ export async function GET(
         );
       }
 
-      if (rawStatus === 1) {
+      /*
+       * The CPMM PDA may become discoverable during the migration transition.
+       * Discover it for both Migrate (1) and Trade (2), but only mark CPMM
+       * trading ready once LaunchLab reaches Trade (2).
+       */
+      if (
+        rawStatus === 1 ||
+        rawStatus === 2
+      ) {
         cpmmPoolId =
           await findGraduatedCpmmPool({
             mintA:
@@ -421,15 +435,32 @@ export async function GET(
           launchpadActive:
             rawStatus === 0 &&
             !thresholdReached,
+
+          /*
+           * Keep graduationReady true throughout status 1 so existing clients
+           * continue to pause LaunchLab trading while migration is underway.
+           */
           graduationReady:
-            rawStatus === 0 &&
-            thresholdReached,
-          graduated:
+            (rawStatus === 0 &&
+              thresholdReached) ||
             rawStatus === 1,
-          cancelled:
+
+          migrationPending:
+            rawStatus === 1,
+
+          graduated:
             rawStatus === 2,
+
+          /*
+           * LaunchLab PoolStatus has no "cancelled" value in the 0/1/2 state
+           * machine. Keep this compatibility field false so older UI code
+           * cannot mislabel Trade (2) as cancelled.
+           */
+          cancelled:
+            false,
+
           cpmmReady:
-            rawStatus === 1 &&
+            rawStatus === 2 &&
             Boolean(
               cpmmPoolId,
             ),

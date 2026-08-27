@@ -41,7 +41,7 @@ type KodiakConfigResponse = {
 type GraduationState = {
   network: string;
   mint: string;
-  state: "active" | "graduated" | "cancelled" | "unknown";
+  state: "active" | "migrating" | "graduated" | "cancelled" | "unknown";
   rawStatus: number;
   migrateType: "cpmm" | "amm";
   launchpadPoolId: string;
@@ -58,6 +58,7 @@ type GraduationState = {
   trading: {
     launchpadActive: boolean;
     graduationReady: boolean;
+    migrationPending: boolean;
     graduated: boolean;
     cancelled: boolean;
     cpmmReady: boolean;

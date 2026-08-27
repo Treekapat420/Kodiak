@@ -58,9 +58,10 @@ function configuredPlatformId() {
 }
 
 function statusLabel(status: number) {
+  // Raydium LaunchLab: 0=Fund, 1=Migrate, 2=Trade.
   if (status === 0) return "active";
-  if (status === 1) return "graduated";
-  if (status === 2) return "cancelled";
+  if (status === 1) return "migrating";
+  if (status === 2) return "graduated";
   return "unknown";
 }
 
@@ -287,22 +288,34 @@ export async function GET(request: NextRequest, context: Context) {
       {
         id: "graduation-transition",
         label: "Graduation transition",
-        pass: rawStatus === 0 ? !thresholdReached : rawStatus === 1,
+        pass:
+          rawStatus === 0
+            ? !thresholdReached
+            : rawStatus === 1 ||
+              rawStatus === 2,
         detail:
-          rawStatus === 1
-            ? "LaunchLab marks the token graduated."
-            : thresholdReached
-              ? "Target reached; waiting for LaunchLab to mark graduation."
-              : "Bonding curve is still active.",
+          rawStatus === 2
+            ? "LaunchLab is in Trade state: migration is complete."
+            : rawStatus === 1
+              ? "LaunchLab is in Migrate state: funding ended and migration is pending/in progress."
+              : thresholdReached
+                ? "Target reached; waiting for LaunchLab to enter Migrate state."
+                : "Bonding curve is still active.",
       },
       {
         id: "cpmm-pool",
         label: "Graduated CPMM pool",
-        pass: rawStatus !== 1 || Boolean(cpmmPoolId),
+        pass:
+          rawStatus !== 2 ||
+          Boolean(cpmmPoolId),
         detail:
-          rawStatus !== 1
-            ? "Not required until graduation."
-            : cpmmPoolId || "Graduated, but the expected CPMM pool is not discoverable yet.",
+          rawStatus === 2
+            ? cpmmPoolId ||
+              "LaunchLab is in Trade state, but the expected CPMM pool is not discoverable yet."
+            : rawStatus === 1
+              ? cpmmPoolId ||
+                "Migration is in progress; the CPMM pool is not discoverable yet."
+              : "Not required until migration.",
       },
     ];
 
@@ -350,10 +363,13 @@ export async function GET(request: NextRequest, context: Context) {
         },
         trading: {
           launchpadActive: rawStatus === 0 && !thresholdReached,
-          graduationReady: rawStatus === 0 && thresholdReached,
-          graduated: rawStatus === 1,
-          cancelled: rawStatus === 2,
-          cpmmReady: rawStatus === 1 && Boolean(cpmmPoolId),
+          graduationReady:
+            (rawStatus === 0 && thresholdReached) ||
+            rawStatus === 1,
+          migrationPending: rawStatus === 1,
+          graduated: rawStatus === 2,
+          cancelled: false,
+          cpmmReady: rawStatus === 2 && Boolean(cpmmPoolId),
         },
         checks,
         transactions: {

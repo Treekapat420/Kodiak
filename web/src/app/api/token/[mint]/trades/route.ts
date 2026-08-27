@@ -12,6 +12,7 @@ import {
 } from "@/lib/market-sync";
 import { recordCreatorReward } from "@/lib/creator-rewards";
 import { recordOfficialKodiakHolderRewards } from "@/lib/holder-rewards";
+import { publishPendingRewardsEpoch } from "@/lib/onchain-holder-rewards";
 import {
   KODIAK_NETWORK,
 } from "@/lib/solana/network";
@@ -487,7 +488,42 @@ export async function POST(
     }
 
     try {
-      await recordOfficialKodiakHolderRewards(saved);
+      const holderReward =
+        await recordOfficialKodiakHolderRewards(
+          saved,
+        );
+
+      if (holderReward) {
+        try {
+          const published =
+            await publishPendingRewardsEpoch(
+              saved.mint,
+            );
+
+          if (
+            published.published
+          ) {
+            console.info(
+              "Published automatic $KODIAK rewards epoch:",
+              published,
+            );
+          }
+        } catch (
+          publishError
+        ) {
+          /*
+           * Never fail a verified trade because the
+           * rewards publisher is temporarily
+           * unavailable. The pending reward ledger
+           * remains intact and prepareOnchainClaim()
+           * will retry publication later.
+           */
+          console.error(
+            "Automatic $KODIAK rewards epoch publish failed:",
+            publishError,
+          );
+        }
+      }
     } catch (holderRewardError) {
       console.error(
         "Official $KODIAK holder reward allocation failed:",

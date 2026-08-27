@@ -1,105 +1,263 @@
-import { NextRequest, NextResponse } from "next/server";
-import { PublicKey } from "@solana/web3.js";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
 
 import {
-  consumeClaimNonce,
-  createClaimChallenge,
+  PublicKey,
+} from "@solana/web3.js";
+
+import {
   getHolderRewardStatus,
   isOfficialKodiakRewardsMint,
-  sendHolderRewardClaim,
 } from "@/lib/holder-rewards";
-import { verifySolanaMessage } from "@/lib/server/verify-solana-signature";
-import { KODIAK_NETWORK } from "@/lib/solana/network";
+
+import {
+  finalizeOnchainClaim,
+  getOnchainRewardsStatus,
+  prepareOnchainClaim,
+} from "@/lib/onchain-holder-rewards";
+
+import {
+  KODIAK_NETWORK,
+} from "@/lib/solana/network";
 
 export const dynamic = "force-dynamic";
 
-type Context = { params: Promise<{ mint: string }> };
+type Context = {
+  params: Promise<{
+    mint: string;
+  }>;
+};
 
 type RequestBody = {
-  action?: "prepare" | "claim";
+  action?:
+    | "prepare"
+    | "finalize";
   wallet?: string;
-  nonce?: string;
-  message?: string;
   signature?: string;
 };
 
-function canonical(value: string, label: string) {
-  const key = new PublicKey(value);
-  if (key.toBase58() !== value) throw new Error(`${label} is not a canonical Solana public key.`);
+function canonical(
+  value: string,
+  label: string,
+) {
+  const key =
+    new PublicKey(value);
+
+  if (key.toBase58() !== value) {
+    throw new Error(
+      `${label} is not a canonical Solana public key.`,
+    );
+  }
+
   return key.toBase58();
 }
 
-export async function GET(request: NextRequest, context: Context) {
+export async function GET(
+  request: NextRequest,
+  context: Context,
+) {
   try {
-    const { mint: rawMint } = await context.params;
-    const mint = canonical(rawMint, "Token mint");
-    const walletRaw = request.nextUrl.searchParams.get("wallet")?.trim() ?? "";
-    const wallet = walletRaw ? canonical(walletRaw, "Wallet") : undefined;
+    const {
+      mint: rawMint,
+    } = await context.params;
 
-    const status = await getHolderRewardStatus(mint, wallet);
-    return NextResponse.json(status, { headers: { "Cache-Control": "no-store, max-age=0" } });
+    const mint = canonical(
+      rawMint,
+      "Token mint",
+    );
+
+    const walletRaw =
+      request.nextUrl.searchParams
+        .get("wallet")
+        ?.trim() ?? "";
+
+    const wallet = walletRaw
+      ? canonical(
+          walletRaw,
+          "Wallet",
+        )
+      : undefined;
+
+    const [
+      status,
+      onchain,
+    ] = await Promise.all([
+      getHolderRewardStatus(
+        mint,
+        wallet,
+      ),
+      getOnchainRewardsStatus(
+        mint,
+        wallet,
+      ),
+    ]);
+
+    const pendingLamports =
+      "claimableLamports" in status
+        ? Number(
+            status.claimableLamports ?? 0,
+          )
+        : 0;
+
+    const pendingSol =
+      "claimableSol" in status
+        ? Number(
+            status.claimableSol ?? 0,
+          )
+        : 0;
+
+    const activeLamports =
+      Number(
+        onchain.activeClaimLamports ?? 0,
+      );
+
+    const activeSol =
+      Number(
+        onchain.activeClaimSol ?? 0,
+      );
+
+    return NextResponse.json(
+      {
+        ...status,
+        ...onchain,
+
+        // Claimable includes both rewards that have
+        // already been published on-chain and any
+        // newer rewards waiting for the next auto
+        // epoch publisher pass.
+        claimableLamports:
+          pendingLamports +
+          activeLamports,
+
+        claimableSol:
+          pendingSol +
+          activeSol,
+      },
+      {
+        headers: {
+          "Cache-Control":
+            "no-store, max-age=0",
+        },
+      },
+    );
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unable to load SOL rewards.", network: KODIAK_NETWORK },
-      { status: 400 },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to load SOL rewards.",
+        network:
+          KODIAK_NETWORK,
+      },
+      {
+        status: 400,
+      },
     );
   }
 }
 
-export async function POST(request: NextRequest, context: Context) {
+export async function POST(
+  request: NextRequest,
+  context: Context,
+) {
   try {
-    const { mint: rawMint } = await context.params;
-    const mint = canonical(rawMint, "Token mint");
-    const body = (await request.json()) as RequestBody;
-    const wallet = canonical(body.wallet?.trim() ?? "", "Wallet");
+    const {
+      mint: rawMint,
+    } = await context.params;
 
-    if (!isOfficialKodiakRewardsMint(mint)) {
+    const mint = canonical(
+      rawMint,
+      "Token mint",
+    );
+
+    const body =
+      (await request.json()) as
+        RequestBody;
+
+    const wallet = canonical(
+      body.wallet?.trim() ?? "",
+      "Wallet",
+    );
+
+    if (
+      !isOfficialKodiakRewardsMint(
+        mint,
+      )
+    ) {
       return NextResponse.json(
-        { error: "SOL rewards are only enabled for the official Devnet $KODIAK token.", network: KODIAK_NETWORK },
-        { status: 403 },
+        {
+          error:
+            "SOL rewards are only enabled for the official Devnet $KODIAK token.",
+        },
+        {
+          status: 403,
+        },
       );
     }
 
-    if (body.action === "prepare") {
-      const challenge = await createClaimChallenge(mint, wallet);
-      return NextResponse.json({ ok: true, ...challenge, network: KODIAK_NETWORK });
+    if (
+      body.action === "prepare"
+    ) {
+      return NextResponse.json({
+        ok: true,
+        ...(await prepareOnchainClaim(
+          mint,
+          wallet,
+        )),
+        network:
+          KODIAK_NETWORK,
+      });
     }
 
-    if (body.action !== "claim") {
-      return NextResponse.json({ error: "Invalid rewards action.", network: KODIAK_NETWORK }, { status: 400 });
+    if (
+      body.action === "finalize"
+    ) {
+      const signature =
+        body.signature?.trim() ?? "";
+
+      if (!signature) {
+        throw new Error(
+          "Missing claim transaction signature.",
+        );
+      }
+
+      return NextResponse.json({
+        ok: true,
+        ...(await finalizeOnchainClaim(
+          mint,
+          wallet,
+          signature,
+        )),
+        network:
+          KODIAK_NETWORK,
+      });
     }
 
-    const nonce = body.nonce?.trim() ?? "";
-    const message = body.message ?? "";
-    const signature = body.signature?.trim() ?? "";
-
-    const expectedMessage = [
-      "Kodiak SOL Rewards claim",
-      "network:devnet",
-      `mint:${mint}`,
-      `wallet:${wallet}`,
-      `nonce:${nonce}`,
-    ].join("\n");
-
-    if (!nonce || message !== expectedMessage || !signature) {
-      return NextResponse.json({ error: "The SOL rewards claim challenge is invalid.", network: KODIAK_NETWORK }, { status: 400 });
-    }
-
-    if (!verifySolanaMessage(wallet, message, signature)) {
-      return NextResponse.json({ error: "Wallet signature verification failed.", network: KODIAK_NETWORK }, { status: 401 });
-    }
-
-    const nonceAccepted = await consumeClaimNonce(mint, wallet, nonce);
-    if (!nonceAccepted) {
-      return NextResponse.json({ error: "This claim challenge expired or was already used. Try Claim SOL again.", network: KODIAK_NETWORK }, { status: 409 });
-    }
-
-    const result = await sendHolderRewardClaim(mint, wallet);
-    return NextResponse.json({ ok: true, ...result, network: KODIAK_NETWORK });
+    return NextResponse.json(
+      {
+        error:
+          "Invalid rewards action.",
+      },
+      {
+        status: 400,
+      },
+    );
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unable to claim SOL rewards.", network: KODIAK_NETWORK },
-      { status: 500 },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to process SOL rewards.",
+        network:
+          KODIAK_NETWORK,
+      },
+      {
+        status: 500,
+      },
     );
   }
 }

@@ -1,0 +1,113 @@
+name: "Initialize Kodiak Rewards Devnet"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - devnet
+
+jobs:
+  initialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Install Solana web3"
+        run: |
+          mkdir -p /tmp/kodiak-init
+          cd /tmp/kodiak-init
+          npm init -y
+          npm install @solana/web3.js@1.98.4
+
+      - name: "Initialize rewards"
+        env:
+          DEPLOYER_KEY: ${{ secrets.KODIAK_REWARDS_DEVNET_DEPLOYER_KEY }}
+        run: |
+          cd /tmp/kodiak-init
+          cat > init.mjs <<'EOF'
+          import crypto from "node:crypto";
+          import {
+            Connection,
+            Keypair,
+            PublicKey,
+            SystemProgram,
+            Transaction,
+            TransactionInstruction,
+            sendAndConfirmTransaction
+          } from "@solana/web3.js";
+
+          const connection = new Connection("https://api.devnet.solana.com", "confirmed");
+          const programId = new PublicKey("68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB");
+          const mint = new PublicKey("5gKUUuL6iSknoKDpbCNruVDNv2XBHQs1D5MhZs8M5X55");
+          const expectedAuthority = "4937J2tRmFTq2b4usH2tococxp6StXevF11xryp4sm6k";
+
+          if (!process.env.DEPLOYER_KEY) {
+            throw new Error("Missing KODIAK_REWARDS_DEVNET_DEPLOYER_KEY secret");
+          }
+
+          const authority = Keypair.fromSecretKey(
+            Uint8Array.from(JSON.parse(process.env.DEPLOYER_KEY))
+          );
+
+          if (authority.publicKey.toBase58() !== expectedAuthority) {
+            throw new Error("The deployer secret does not match the expected Devnet deployer");
+          }
+
+          const [config] = PublicKey.findProgramAddressSync(
+            [Buffer.from("kodiak-rewards"), mint.toBuffer()],
+            programId
+          );
+
+          const [vault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault"), config.toBuffer()],
+            programId
+          );
+
+          console.log("Authority:", authority.publicKey.toBase58());
+          console.log("Program:", programId.toBase58());
+          console.log("Mint:", mint.toBase58());
+          console.log("Config PDA:", config.toBase58());
+          console.log("Vault PDA:", vault.toBase58());
+
+          const existing = await connection.getAccountInfo(config);
+
+          if (existing) {
+            if (!existing.owner.equals(programId)) {
+              throw new Error("Config PDA exists but is owned by the wrong program");
+            }
+            console.log("SUCCESS: rewards config is already initialized");
+            process.exit(0);
+          }
+
+          const program = await connection.getAccountInfo(programId);
+          if (!program || !program.executable) {
+            throw new Error("Rewards program is not executable on Devnet");
+          }
+
+          const discriminator = crypto
+            .createHash("sha256")
+            .update("global:initialize")
+            .digest()
+            .subarray(0, 8);
+
+          const ix = new TransactionInstruction({
+            programId,
+            keys: [
+              { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+              { pubkey: mint, isSigner: false, isWritable: false },
+              { pubkey: config, isSigner: false, isWritable: true },
+              { pubkey: vault, isSigner: false, isWritable: false },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
+            ],
+            data: discriminator
+          });
+
+          const signature = await sendAndConfirmTransaction(
+            connection,
+            new Transaction().add(ix),
+            [authority],
+            { commitment: "confirmed" }
+          );
+
+          console.log("SUCCESS: rewards initialized");
+          console.log("Transaction:", signature);
+          EOF
+          node init.mjs

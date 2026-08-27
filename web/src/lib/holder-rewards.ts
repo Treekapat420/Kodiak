@@ -3,12 +3,9 @@ import "server-only";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   Connection,
-  Keypair,
   LAMPORTS_PER_SOL,
   ParsedAccountData,
   PublicKey,
-  SystemProgram,
-  Transaction,
 } from "@solana/web3.js";
 
 import type { StoredTrade } from "@/lib/devnet-market";
@@ -60,6 +57,10 @@ function pendingKey(mint: string, wallet: string) {
   return `${rewardPrefix(mint)}:pending:${wallet}`;
 }
 
+function pendingWalletsKey(mint: string) {
+  return `${rewardPrefix(mint)}:pending-wallets`;
+}
+
 function claimedKey(mint: string, wallet: string) {
   return `${rewardPrefix(mint)}:claimed:${wallet}`;
 }
@@ -80,13 +81,6 @@ function totalClaimedKey(mint: string) {
   return `${rewardPrefix(mint)}:claimed-lamports`;
 }
 
-function claimNonceKey(mint: string, wallet: string) {
-  return `${rewardPrefix(mint)}:nonce:${wallet}`;
-}
-
-function claimInflightKey(mint: string, wallet: string) {
-  return `${rewardPrefix(mint)}:claim-inflight:${wallet}`;
-}
 
 function excludedWallets() {
   return new Set(
@@ -209,7 +203,14 @@ export async function recordOfficialKodiakHolderRewards(trade: StoredTrade) {
 
     for (const allocation of allocations) {
       if (allocation.lamports > 0) {
-        pipeline.incrby(pendingKey(trade.mint, allocation.wallet), allocation.lamports);
+        pipeline.incrby(
+          pendingKey(trade.mint, allocation.wallet),
+          allocation.lamports,
+        );
+        pipeline.sadd(
+          pendingWalletsKey(trade.mint),
+          allocation.wallet,
+        );
       }
     }
 
@@ -240,24 +241,6 @@ export async function recordOfficialKodiakHolderRewards(trade: StoredTrade) {
   }
 }
 
-function rewardKeypair(): Keypair | null {
-  const raw = process.env.KODIAK_DEVNET_REWARDS_SECRET_KEY?.trim();
-  if (!raw || !KODIAK_IS_DEVNET) return null;
-
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed) || parsed.length !== 64) return null;
-
-    const bytes = Uint8Array.from(parsed.map((value) => Number(value)));
-    return Keypair.fromSecretKey(bytes);
-  } catch {
-    return null;
-  }
-}
-
-export function getRewardsVaultPublicKey() {
-  return rewardKeypair()?.publicKey.toBase58() ?? null;
-}
 
 async function readInteger(key: string) {
   const value = await getRedis().get<string | number>(key);
@@ -274,9 +257,7 @@ export async function getHolderRewardStatus(mint: string, wallet?: string) {
     } as const;
   }
 
-  const keypair = rewardKeypair();
-  const [vaultLamports, generatedLamports, totalClaimedLamports] = await Promise.all([
-    keypair ? connection.getBalance(keypair.publicKey, "confirmed") : Promise.resolve(0),
+  const [generatedLamports, totalClaimedLamports] = await Promise.all([
     readInteger(totalGeneratedKey(mint)),
     readInteger(totalClaimedKey(mint)),
   ]);
@@ -315,10 +296,6 @@ export async function getHolderRewardStatus(mint: string, wallet?: string) {
     officialMint: mint,
     holderRewardBps: KODIAK_HOLDER_REWARD_BPS,
     creatorRetainedBps: KODIAK_CREATOR_RETAINED_BPS,
-    vaultConfigured: Boolean(keypair),
-    vault: keypair?.publicKey.toBase58() ?? null,
-    vaultLamports,
-    vaultSol: vaultLamports / LAMPORTS_PER_SOL,
     generatedLamports,
     generatedSol: generatedLamports / LAMPORTS_PER_SOL,
     totalClaimedLamports,
@@ -331,115 +308,4 @@ export async function getHolderRewardStatus(mint: string, wallet?: string) {
     lifetimeClaimedLamports,
     lifetimeClaimedSol: lifetimeClaimedLamports / LAMPORTS_PER_SOL,
   } as const;
-}
-
-export async function createClaimChallenge(mint: string, wallet: string) {
-  if (!isOfficialKodiakRewardsMint(mint)) {
-    throw new Error("SOL holder rewards are only enabled for the official Devnet $KODIAK token.");
-  }
-
-  const walletKey = new PublicKey(wallet);
-  if (walletKey.toBase58() !== wallet) throw new Error("Invalid wallet address.");
-
-  const nonce = crypto.randomUUID();
-  const message = [
-    "Kodiak SOL Rewards claim",
-    "network:devnet",
-    `mint:${mint}`,
-    `wallet:${wallet}`,
-    `nonce:${nonce}`,
-  ].join("\n");
-
-  await getRedis().set(claimNonceKey(mint, wallet), nonce, { ex: 300 });
-  return { nonce, message };
-}
-
-export async function consumeClaimNonce(mint: string, wallet: string, nonce: string) {
-  const redis = getRedis();
-  const key = claimNonceKey(mint, wallet);
-  const expected = await redis.get<string>(key);
-
-  if (!expected || expected !== nonce) return false;
-  await redis.del(key);
-  return true;
-}
-
-export async function sendHolderRewardClaim(mint: string, wallet: string) {
-  if (!isOfficialKodiakRewardsMint(mint)) {
-    throw new Error("SOL holder rewards are only enabled for the official Devnet $KODIAK token.");
-  }
-
-  const keypair = rewardKeypair();
-  if (!keypair) throw new Error("The Devnet SOL rewards vault is not configured yet.");
-
-  const destination = new PublicKey(wallet);
-  const redis = getRedis();
-  const inflightKey = claimInflightKey(mint, wallet);
-  const created = await redis.set(inflightKey, "reserving", { nx: true });
-  if (!created) throw new Error("A SOL reward claim for this wallet is already being processed.");
-
-  let reserved = 0;
-  let pendingWasReserved = false;
-  let broadcasted = false;
-
-  try {
-    reserved = await readInteger(pendingKey(mint, wallet));
-    if (reserved <= 0) throw new Error("This wallet has no claimable SOL rewards yet.");
-
-    const vaultBalance = await connection.getBalance(keypair.publicKey, "confirmed");
-    const feeReserve = 10_000;
-    if (vaultBalance < reserved + feeReserve) {
-      throw new Error("The Devnet rewards vault needs more SOL before this claim can be paid.");
-    }
-
-    // Reserve the full pending amount before broadcasting. If execution crashes
-    // after broadcast, the durable inflight record prevents a duplicate payout.
-    await redis.set(pendingKey(mint, wallet), 0);
-    pendingWasReserved = true;
-    await redis.set(
-      inflightKey,
-      JSON.stringify({ lamports: reserved, startedAt: Date.now() }),
-    );
-
-    const transaction = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: keypair.publicKey,
-        toPubkey: destination,
-        lamports: reserved,
-      }),
-    );
-    transaction.feePayer = keypair.publicKey;
-    transaction.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
-    transaction.sign(keypair);
-
-    const signature = await connection.sendRawTransaction(transaction.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
-    });
-    broadcasted = true;
-    await redis.set(
-      inflightKey,
-      JSON.stringify({ lamports: reserved, signature, startedAt: Date.now() }),
-    );
-    await connection.confirmTransaction(signature, "confirmed");
-
-    const pipeline = redis.pipeline();
-    pipeline.incrby(claimedKey(mint, wallet), reserved);
-    pipeline.incrby(totalClaimedKey(mint), reserved);
-    pipeline.del(inflightKey);
-    await pipeline.exec();
-
-    return { signature, lamports: reserved, sol: reserved / LAMPORTS_PER_SOL };
-  } catch (error) {
-    if (!broadcasted) {
-      if (pendingWasReserved && reserved > 0) {
-        await redis.incrby(pendingKey(mint, wallet), reserved);
-      }
-      await redis.del(inflightKey);
-    }
-    // If the transaction was broadcast but confirmation failed, leave the
-    // durable inflight reservation intact. That fails safe against a duplicate
-    // payout until the signature can be reconciled.
-    throw error;
-  }
 }

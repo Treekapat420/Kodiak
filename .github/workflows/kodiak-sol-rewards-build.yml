@@ -1,0 +1,151 @@
+name: Kodiak SOL Rewards - Anchor Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - devnet
+      - rewards-devnet
+    paths:
+      - "solana-rewards/**"
+      - ".github/workflows/kodiak-sol-rewards-build.yml"
+  pull_request:
+    paths:
+      - "solana-rewards/**"
+      - ".github/workflows/kodiak-sol-rewards-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  anchor-build:
+    name: Compile hardened rewards program
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    defaults:
+      run:
+        working-directory: solana-rewards
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91.0"
+          components: rustfmt
+
+      - name: Install Agave
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.14/install)"
+
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          solana --version
+          cargo-build-sbf --version
+
+      - name: Install Anchor 0.32.1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo install --git https://github.com/coral-xyz/anchor avm --force
+          avm install 0.32.1
+          avm use 0.32.1
+
+          echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
+
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          anchor --version
+
+      - name: Force install platform-tools v1.54
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          rm -rf "$HOME/.cache/solana/v1.54"
+
+          cargo build-sbf \
+            --tools-version v1.54 \
+            --force-tools-install \
+            --manifest-path programs/kodiak-sol-rewards/Cargo.toml
+
+      - name: Verify SBF platform-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          echo "Host:"
+          rustc --version
+          cargo --version
+
+          echo "Solana:"
+          solana --version
+          cargo-build-sbf --version
+
+          echo "Platform-tools v1.54 bundled Cargo:"
+          "$HOME/.cache/solana/v1.54/platform-tools/rust/bin/cargo" --version || true
+
+          echo "Platform-tools v1.54 bundled Rust:"
+          "$HOME/.cache/solana/v1.54/platform-tools/rust/bin/rustc" --version || true
+
+          echo "Anchor:"
+          anchor --version
+
+      - name: Format Rust source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+
+      - name: Cargo check
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check --workspace --all-targets
+
+      - name: Anchor build using platform-tools v1.54
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+
+          # Workspace Cargo.toml pins tools-version = "1.54".
+          anchor build
+
+      - name: Show build artifacts
+        if: success()
+        shell: bash
+        run: |
+          echo "Deploy artifacts:"
+          find target/deploy -maxdepth 1 -type f -print || true
+
+          echo "IDL artifacts:"
+          find target/idl -maxdepth 1 -type f -print || true
+
+      - name: Upload compiled program and IDL
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodiak-sol-rewards-anchor-build
+          path: |
+            solana-rewards/target/deploy/*.so
+            solana-rewards/target/idl/*.json
+            solana-rewards/target/types/*.ts
+            solana-rewards/Cargo.lock
+          if-no-files-found: error
+          retention-days: 7

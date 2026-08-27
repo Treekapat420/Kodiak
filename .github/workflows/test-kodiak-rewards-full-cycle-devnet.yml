@@ -1,0 +1,25 @@
+name: "Kodiak Rewards Devnet Full Cycle"
+
+on:
+  push:
+    branches:
+      - devnet
+    paths:
+      - ".github/workflows/test-kodiak-rewards-full-cycle-devnet.yml"
+      - "scripts/test-kodiak-rewards-full-cycle-devnet.mjs"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+
+      - name: "Install dependency"
+        run: npm install --no-save @solana/web3.js@1.98.4
+
+      - name: "Run full-cycle test"
+        env:
+          DEPLOYER_KEY: ${{ secrets.KODIAK_REWARDS_DEVNET_DEPLOYER_KEY }}
+        run: node scripts/test-kodiak-rewards-full-cycle-devnet.mjs

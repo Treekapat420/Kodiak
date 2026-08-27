@@ -1,0 +1,19 @@
+[toolchain]
+anchor_version = "0.32.1"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+kodiak_sol_rewards = "68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB"
+
+[programs.devnet]
+kodiak_sol_rewards = "68ueodLyUjvPDYq7tkfV6NSy3ThAwtQcBGvMtg6aVUTB"
+
+[provider]
+cluster = "Devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

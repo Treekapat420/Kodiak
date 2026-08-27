@@ -1035,7 +1035,7 @@ export function ClaimCreatorRewards() {
 
       <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-black/20 p-4">
         <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-500">
-          Pre-graduation Â· LaunchLab
+          Pre-graduation - LaunchLab
         </p>
 
         <p className="mt-2 text-2xl font-black text-emerald-300">
@@ -1056,7 +1056,7 @@ export function ClaimCreatorRewards() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.16em] text-amber-300">
-              Post-graduation Â· CPMM
+              Post-graduation - CPMM
             </p>
 
             <h3 className="mt-2 text-lg font-black">

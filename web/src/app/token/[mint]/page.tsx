@@ -33,7 +33,7 @@ type TokenPayload = {
 type GraduationState = {
   network: string;
   mint: string;
-  state: "active" | "graduated" | "cancelled" | "unknown";
+  state: "active" | "migrating" | "graduated" | "cancelled" | "unknown";
   rawStatus: number;
   migrateType: "cpmm" | "amm";
   launchpadPoolId: string;
@@ -50,6 +50,7 @@ type GraduationState = {
   trading: {
     launchpadActive: boolean;
     graduationReady: boolean;
+    migrationPending: boolean;
     graduated: boolean;
     cancelled: boolean;
     cpmmReady: boolean;
@@ -341,7 +342,7 @@ export default function TokenPage() {
             <div className="min-w-0">
               <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-300">
                 {graduation?.trading.graduated
-                  ? "Kodiak ÃÂ· Raydium CPMM"
+                  ? "Kodiak ÃÂÃÂ· Raydium CPMM"
                   : "Kodiak LaunchLab"}
                 {" | "}
                 {NETWORK_LABEL}
@@ -531,11 +532,13 @@ export default function TokenPage() {
               <h2 className="mt-2 text-xl font-black">
                 {graduation?.trading.graduated
                   ? "Graduated to Raydium CPMM"
-                  : graduation?.trading.graduationReady
-                    ? "Graduation ready"
-                    : graduation?.trading.cancelled
-                      ? "Launch cancelled"
-                      : "LaunchLab bonding curve"}
+                  : graduation?.trading.migrationPending
+                    ? "Migrating to Raydium CPMM"
+                    : graduation?.trading.graduationReady
+                      ? "Graduation ready"
+                      : graduation?.trading.cancelled
+                        ? "Launch cancelled"
+                        : "LaunchLab bonding curve"}
               </h2>
 
               {graduation ? (
@@ -572,11 +575,13 @@ export default function TokenPage() {
                       value={
                         graduation.trading.graduated
                           ? "Graduated"
-                          : graduation.trading.graduationReady
-                            ? "Graduation ready"
-                            : graduation.trading.cancelled
-                              ? "Cancelled"
-                              : "Bonding"
+                          : graduation.trading.migrationPending
+                            ? "Migrating"
+                            : graduation.trading.graduationReady
+                              ? "Graduation ready"
+                              : graduation.trading.cancelled
+                                ? "Cancelled"
+                                : "Bonding"
                       }
                     />
 
@@ -604,9 +609,16 @@ export default function TokenPage() {
                     </a>
                   )}
 
-                  {graduation.trading.graduationReady && (
+                  {graduation.trading.graduationReady &&
+                    !graduation.trading.migrationPending && (
+                      <p className="mt-4 text-sm leading-6 text-amber-200">
+                        The bonding target has been reached. Kodiak is waiting for LaunchLab to begin the on-chain migration transition.
+                      </p>
+                    )}
+
+                  {graduation.trading.migrationPending && (
                     <p className="mt-4 text-sm leading-6 text-amber-200">
-                      The bonding target has been reached. Kodiak is waiting for the on-chain graduation transition before routing trading to CPMM.
+                      LaunchLab funding is complete and the token is migrating to Raydium CPMM. Curve trading remains paused until LaunchLab reaches its Trade state.
                     </p>
                   )}
 
@@ -640,12 +652,14 @@ export default function TokenPage() {
                   label="Status"
                   value={
                     graduation?.trading.graduated
-                      ? "Verified ÃÂ· Graduated"
-                      : graduation?.trading.graduationReady
-                        ? "Verified ÃÂ· Graduation ready"
-                        : graduation?.trading.cancelled
-                          ? "Verified ÃÂ· Cancelled"
-                          : "Verified launch"
+                      ? "Verified Â· Graduated"
+                      : graduation?.trading.migrationPending
+                        ? "Verified Â· Migrating"
+                        : graduation?.trading.graduationReady
+                          ? "Verified Â· Graduation ready"
+                          : graduation?.trading.cancelled
+                            ? "Verified Â· Cancelled"
+                            : "Verified launch"
                   }
                 />
 

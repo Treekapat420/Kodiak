@@ -108,6 +108,30 @@ type CpmmCreatorFeeResponse = {
   data?: CpmmCreatorFeeEntry[];
 };
 
+type KodiakLaunchRecord = {
+  mint: string;
+  name: string;
+  symbol: string;
+};
+
+type KodiakGraduationResponse = {
+  mint?: string;
+  state?: string;
+  cpmmPoolId?: string | null;
+  trading?: {
+    graduated?: boolean;
+    cpmmReady?: boolean;
+  };
+  error?: string;
+};
+
+type KnownCpmmPool = {
+  mint: string;
+  name: string;
+  symbol: string;
+  poolId: string;
+};
+
 const NETWORK_LABEL = kodiakNetworkLabel();
 
 /*
@@ -406,6 +430,20 @@ export function ClaimCreatorRewards() {
     );
 
   const [
+    knownCpmmPools,
+    setKnownCpmmPools,
+  ] =
+    useState<KnownCpmmPool[]>(
+      [],
+    );
+
+  const [
+    knownCpmmPoolsLoading,
+    setKnownCpmmPoolsLoading,
+  ] =
+    useState(false);
+
+  const [
     status,
     setStatus,
   ] = useState<Status>({
@@ -623,11 +661,129 @@ export function ClaimCreatorRewards() {
     }
   }
 
+  async function discoverKnownCpmmPools() {
+    if (!publicKey) {
+      setKnownCpmmPools([]);
+      return [];
+    }
+
+    try {
+      setKnownCpmmPoolsLoading(true);
+
+      const launchesResponse =
+        await fetch(
+          `/api/creator/launches?creator=${encodeURIComponent(
+            publicKey.toBase58(),
+          )}`,
+          {
+            cache: "no-store",
+          },
+        );
+
+      const launchesPayload =
+        (await launchesResponse.json()) as {
+          launches?: KodiakLaunchRecord[];
+          error?: string;
+        };
+
+      if (!launchesResponse.ok) {
+        throw new Error(
+          launchesPayload.error ||
+            "Unable to load this creator's Kodiak launches.",
+        );
+      }
+
+      const launches =
+        Array.isArray(
+          launchesPayload.launches,
+        )
+          ? launchesPayload.launches
+          : [];
+
+      const results =
+        await Promise.all(
+          launches.map(
+            async (
+              launch,
+            ): Promise<KnownCpmmPool | null> => {
+              try {
+                const response =
+                  await fetch(
+                    `/api/token/${encodeURIComponent(
+                      launch.mint,
+                    )}/graduation`,
+                    {
+                      cache: "no-store",
+                    },
+                  );
+
+                const payload =
+                  (await response.json()) as
+                    KodiakGraduationResponse;
+
+                if (
+                  !response.ok ||
+                  !payload.trading
+                    ?.graduated ||
+                  !payload.trading
+                    ?.cpmmReady ||
+                  !payload.cpmmPoolId
+                ) {
+                  return null;
+                }
+
+                return {
+                  mint:
+                    launch.mint,
+                  name:
+                    launch.name,
+                  symbol:
+                    launch.symbol,
+                  poolId:
+                    payload.cpmmPoolId,
+                };
+              } catch {
+                return null;
+              }
+            },
+          ),
+        );
+
+      const pools =
+        results.filter(
+          (
+            item,
+          ): item is KnownCpmmPool =>
+            Boolean(item),
+        );
+
+      setKnownCpmmPools(
+        pools,
+      );
+
+      return pools;
+    } finally {
+      setKnownCpmmPoolsLoading(
+        false,
+      );
+    }
+  }
+
   async function discoverCpmmCreatorFees() {
     if (!publicKey) {
       setCpmmCreatorFees([]);
+      setKnownCpmmPools([]);
       return;
     }
+
+    setStatus({
+      kind: "working",
+      message:
+        `Checking ${NETWORK_LABEL} CPMM creator fees and Kodiak's graduated pools...`,
+    });
+
+    const pools =
+      await discoverKnownCpmmPools();
 
     try {
       setCpmmCreatorFeesLoading(true);
@@ -660,25 +816,38 @@ export function ClaimCreatorRewards() {
           ? payload.data
           : [],
       );
+
+      setStatus({
+        kind: "idle",
+        message: "",
+      });
     } catch (error) {
       console.error(
-        "Unable to discover CPMM creator fees:",
+        "Raydium CPMM creator-fee index unavailable; using Kodiak known-pool fallback:",
         error,
       );
 
       setCpmmCreatorFees([]);
 
-      setStatus({
-        kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "Unable to load Raydium CPMM creator fees.",
-      });
+      if (pools.length > 0) {
+        setStatus({
+          kind: "idle",
+          message: "",
+        });
+      } else {
+        setStatus({
+          kind: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unable to load Raydium CPMM creator fees.",
+        });
+      }
     } finally {
       setCpmmCreatorFeesLoading(false);
     }
   }
+
 
   async function claimCpmmCreatorFees(
     entry: CpmmCreatorFeeEntry,
@@ -847,6 +1016,151 @@ export function ClaimCreatorRewards() {
       );
     }
   }
+
+  async function claimKnownCpmmPool(
+    pool: KnownCpmmPool,
+  ) {
+    if (
+      !connected ||
+      !publicKey ||
+      !signTransaction ||
+      !signAllTransactions
+    ) {
+      setStatus({
+        kind: "error",
+        message:
+          `Connect the creator wallet on ${NETWORK_LABEL} first.`,
+      });
+      return;
+    }
+
+    try {
+      setClaimingCpmmPool(
+        pool.poolId,
+      );
+
+      setStatus({
+        kind: "working",
+        message:
+          `Loading ${pool.symbol}'s graduated CPMM pool directly from ${NETWORK_LABEL} RPC...`,
+      });
+
+      const raydium =
+        await loadKodiakRaydium({
+          connection,
+          owner:
+            publicKey,
+          signTransaction,
+          signAllTransactions,
+        });
+
+      const rpcPool =
+        await raydium.cpmm.getPoolInfoFromRpc(
+          pool.poolId,
+        );
+
+      assertCorrectCpmmPoolProgram(
+        rpcPool.poolInfo
+          .programId,
+      );
+
+      const cpmm =
+        raydium.cpmm as unknown as {
+          collectCreatorFees: (
+            params: {
+              programId?:
+                PublicKey;
+              poolInfo:
+                unknown;
+              poolKeys?:
+                unknown;
+              txVersion:
+                TxVersion;
+            },
+          ) => Promise<{
+            transaction:
+              unknown;
+            signers?:
+              unknown[];
+          }>;
+        };
+
+      setStatus({
+        kind: "working",
+        message:
+          `Building and simulating ${pool.symbol}'s CPMM creator-fee claim. Phantom will open only if simulation succeeds...`,
+      });
+
+      const built =
+        await cpmm.collectCreatorFees({
+          programId:
+            KODIAK_IS_DEVNET
+              ? DEVNET_PROGRAM_ID
+                  .CREATE_CPMM_POOL_PROGRAM
+              : undefined,
+          poolInfo:
+            rpcPool.poolInfo,
+          poolKeys:
+            rpcPool.poolKeys,
+          txVersion:
+            TxVersion.V0,
+        });
+
+      if (
+        !(
+          built.transaction instanceof
+          VersionedTransaction
+        )
+      ) {
+        throw new Error(
+          "Kodiak expected Raydium to build a versioned CPMM creator-fee transaction.",
+        );
+      }
+
+      const extraSigners =
+        Array.isArray(
+          built.signers,
+        )
+          ? built.signers
+          : [];
+
+      if (
+        extraSigners.length !==
+        0
+      ) {
+        throw new Error(
+          `Kodiak stopped the CPMM creator-fee claim because Raydium returned ${extraSigners.length} additional signer(s). No transaction was sent to the wallet.`,
+        );
+      }
+
+      const signature =
+        await sendWalletFirstTransaction(
+          built.transaction,
+        );
+
+      setStatus({
+        kind: "success",
+        message:
+          `Raydium confirmed ${pool.symbol}'s post-graduation CPMM creator-fee claim on ${NETWORK_LABEL}.`,
+        signature,
+      });
+
+      await discoverCpmmCreatorFees();
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "The direct CPMM creator-fee claim failed.",
+      });
+    } finally {
+      setClaimingCpmmPool(
+        null,
+      );
+    }
+  }
+
 
   useEffect(() => {
     const timer =
@@ -1387,6 +1701,7 @@ export function ClaimCreatorRewards() {
             disabled={
               !connected ||
               cpmmCreatorFeesLoading ||
+              knownCpmmPoolsLoading ||
               busy
             }
             onClick={() =>
@@ -1394,7 +1709,8 @@ export function ClaimCreatorRewards() {
             }
             className="rounded-xl border border-amber-300/25 px-3 py-2 text-xs font-black text-amber-300 disabled:opacity-40"
           >
-            {cpmmCreatorFeesLoading
+            {cpmmCreatorFeesLoading ||
+            knownCpmmPoolsLoading
               ? "Refreshing..."
               : "Refresh CPMM Fees"}
           </button>
@@ -1404,16 +1720,7 @@ export function ClaimCreatorRewards() {
           <p className="mt-4 text-sm text-zinc-500">
             Connect the launch creator wallet to read its Raydium CPMM creator fees.
           </p>
-        ) : cpmmCreatorFeesLoading ? (
-          <p className="mt-4 text-sm text-zinc-500">
-            Reading Raydium&apos;s creator-fee index for this wallet...
-          </p>
-        ) : cpmmCreatorFees.length ===
-          0 ? (
-          <p className="mt-4 text-sm leading-6 text-zinc-500">
-            No Raydium CPMM creator-fee pools were returned for this wallet.
-          </p>
-        ) : (
+        ) : cpmmCreatorFees.length > 0 ? (
           <div className="mt-4 grid gap-3">
             {cpmmCreatorFees.map(
               (
@@ -1438,104 +1745,161 @@ export function ClaimCreatorRewards() {
                     }
                     className="rounded-2xl border border-white/10 bg-black/25 p-4"
                   >
-                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="min-w-0">
-                        <p className="text-sm font-black">
-                          {tokenLabel(
-                            poolInfo
-                              .mintA
-                              .symbol,
-                            poolInfo
-                              .mintA
-                              .address,
-                          )}
-                          {" / "}
-                          {tokenLabel(
-                            poolInfo
-                              .mintB
-                              .symbol,
-                            poolInfo
-                              .mintB
-                              .address,
-                          )}
-                        </p>
+                    <p className="text-sm font-black">
+                      {tokenLabel(
+                        poolInfo
+                          .mintA
+                          .symbol,
+                        poolInfo
+                          .mintA
+                          .address,
+                      )}
+                      {" / "}
+                      {tokenLabel(
+                        poolInfo
+                          .mintB
+                          .symbol,
+                        poolInfo
+                          .mintB
+                          .address,
+                      )}
+                    </p>
 
-                        <p className="mt-1 break-all text-xs text-zinc-600">
-                          CPMM pool:{" "}
-                          {
-                            poolInfo.id
-                          }
-                        </p>
-
-                        <div className="mt-3 grid gap-1 text-sm">
-                          <p>
-                            {tokenLabel(
-                              poolInfo
-                                .mintA
-                                .symbol,
-                              poolInfo
-                                .mintA
-                                .address,
-                            )}{" "}
-                            fees:{" "}
-                            <span className="font-black text-amber-200">
-                              {formatRawTokenAmount(
-                                fee.amountA,
-                                poolInfo
-                                  .mintA
-                                  .decimals,
-                              )}
-                            </span>
-                          </p>
-
-                          <p>
-                            {tokenLabel(
-                              poolInfo
-                                .mintB
-                                .symbol,
-                              poolInfo
-                                .mintB
-                                .address,
-                            )}{" "}
-                            fees:{" "}
-                            <span className="font-black text-amber-200">
-                              {formatRawTokenAmount(
-                                fee.amountB,
-                                poolInfo
-                                  .mintB
-                                  .decimals,
-                              )}
-                            </span>
-                          </p>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        disabled={
-                          busy ||
-                          !hasFees
-                        }
-                        onClick={() =>
-                          void claimCpmmCreatorFees(
-                            entry,
-                          )
-                        }
-                        className="shrink-0 rounded-xl bg-amber-300 px-4 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {claimingCpmmPool ===
+                    <p className="mt-1 break-all text-xs text-zinc-600">
+                      CPMM pool:{" "}
+                      {
                         poolInfo.id
-                          ? "Claiming..."
-                          : hasFees
-                            ? "Claim CPMM Fees"
-                            : "No Fees Yet"}
-                      </button>
+                      }
+                    </p>
+
+                    <div className="mt-3 grid gap-1 text-sm">
+                      <p>
+                        {tokenLabel(
+                          poolInfo
+                            .mintA
+                            .symbol,
+                          poolInfo
+                            .mintA
+                            .address,
+                        )}{" "}
+                        fees:{" "}
+                        <span className="font-black text-amber-200">
+                          {formatRawTokenAmount(
+                            fee.amountA,
+                            poolInfo
+                              .mintA
+                              .decimals,
+                          )}
+                        </span>
+                      </p>
+
+                      <p>
+                        {tokenLabel(
+                          poolInfo
+                            .mintB
+                            .symbol,
+                          poolInfo
+                            .mintB
+                            .address,
+                        )}{" "}
+                        fees:{" "}
+                        <span className="font-black text-amber-200">
+                          {formatRawTokenAmount(
+                            fee.amountB,
+                            poolInfo
+                              .mintB
+                              .decimals,
+                          )}
+                        </span>
+                      </p>
                     </div>
+
+                    <button
+                      type="button"
+                      disabled={
+                        busy ||
+                        !hasFees
+                      }
+                      onClick={() =>
+                        void claimCpmmCreatorFees(
+                          entry,
+                        )
+                      }
+                      className="mt-4 rounded-xl bg-amber-300 px-4 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {claimingCpmmPool ===
+                      poolInfo.id
+                        ? "Claiming..."
+                        : hasFees
+                          ? "Claim CPMM Fees"
+                          : "No Fees Yet"}
+                    </button>
                   </div>
                 );
               },
             )}
           </div>
+        ) : knownCpmmPools.length > 0 ? (
+          <div className="mt-4">
+            <div className="rounded-xl border border-amber-300/15 bg-black/20 p-3 text-sm leading-6 text-zinc-400">
+              Raydium&apos;s creator-fee index did not return a balance. Kodiak found the graduated pool from its own verified launch records instead. The button below loads that exact pool from Solana RPC, builds Raydium&apos;s creator-fee claim, and simulates it before Phantom is opened.
+            </div>
+
+            <div className="mt-3 grid gap-3">
+              {knownCpmmPools.map(
+                (
+                  pool,
+                ) => (
+                  <div
+                    key={
+                      pool.poolId
+                    }
+                    className="rounded-2xl border border-white/10 bg-black/25 p-4"
+                  >
+                    <p className="text-sm font-black">
+                      {pool.name}{" "}
+                      <span className="text-amber-200">
+                        ${pool.symbol}
+                      </span>
+                    </p>
+
+                    <p className="mt-1 break-all text-xs text-zinc-600">
+                      CPMM pool:{" "}
+                      {
+                        pool.poolId
+                      }
+                    </p>
+
+                    <p className="mt-3 text-xs leading-5 text-zinc-500">
+                      Fee amount unavailable while Raydium&apos;s index is unavailable. Kodiak will not send anything unless the direct Raydium claim transaction passes simulation first.
+                    </p>
+
+                    <button
+                      type="button"
+                      disabled={
+                        busy
+                      }
+                      onClick={() =>
+                        void claimKnownCpmmPool(
+                          pool,
+                        )
+                      }
+                      className="mt-4 rounded-xl bg-amber-300 px-4 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {claimingCpmmPool ===
+                      pool.poolId
+                        ? "Checking claim..."
+                        : "Check & Claim CPMM Fees"}
+                    </button>
+                  </div>
+                ),
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-4 text-sm leading-6 text-zinc-500">
+            No graduated Kodiak CPMM pools were found for this connected creator wallet.
+          </p>
         )}
       </div>
 

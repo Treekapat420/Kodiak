@@ -80,6 +80,34 @@ type FeeKeyPosition = {
   info: CpmmLockInfo;
 };
 
+type CpmmCreatorFeeEntry = {
+  id: string;
+  fee: {
+    amountA: string;
+    amountB: string;
+  };
+  poolInfo: {
+    id: string;
+    programId: string;
+    mintA: {
+      address: string;
+      symbol?: string;
+      decimals: number;
+    };
+    mintB: {
+      address: string;
+      symbol?: string;
+      decimals: number;
+    };
+  } & Record<string, unknown>;
+};
+
+type CpmmCreatorFeeResponse = {
+  id?: string;
+  success?: boolean;
+  data?: CpmmCreatorFeeEntry[];
+};
+
 const NETWORK_LABEL = kodiakNetworkLabel();
 
 /*
@@ -272,6 +300,49 @@ function tokenLabel(
   );
 }
 
+function formatRawTokenAmount(
+  raw: string,
+  decimals: number,
+) {
+  const normalized =
+    raw.trim().replace(
+      /^\+/,
+      "",
+    );
+
+  if (!/^\d+$/.test(normalized)) {
+    return "0";
+  }
+
+  const padded =
+    normalized.padStart(
+      decimals + 1,
+      "0",
+    );
+
+  const whole =
+    decimals === 0
+      ? padded
+      : padded.slice(
+          0,
+          -decimals,
+        );
+
+  const fraction =
+    decimals === 0
+      ? ""
+      : padded
+          .slice(-decimals)
+          .replace(
+            /0+$/,
+            "",
+          );
+
+  return fraction
+    ? `${whole}.${fraction}`
+    : whole;
+}
+
 export function ClaimCreatorRewards() {
   const { connection } =
     useConnection();
@@ -307,6 +378,28 @@ export function ClaimCreatorRewards() {
   const [
     claimingFeeKey,
     setClaimingFeeKey,
+  ] =
+    useState<string | null>(
+      null,
+    );
+
+  const [
+    cpmmCreatorFees,
+    setCpmmCreatorFees,
+  ] =
+    useState<CpmmCreatorFeeEntry[]>(
+      [],
+    );
+
+  const [
+    cpmmCreatorFeesLoading,
+    setCpmmCreatorFeesLoading,
+  ] =
+    useState(false);
+
+  const [
+    claimingCpmmPool,
+    setClaimingCpmmPool,
   ] =
     useState<string | null>(
       null,
@@ -530,12 +623,237 @@ export function ClaimCreatorRewards() {
     }
   }
 
+  async function discoverCpmmCreatorFees() {
+    if (!publicKey) {
+      setCpmmCreatorFees([]);
+      return;
+    }
+
+    try {
+      setCpmmCreatorFeesLoading(true);
+
+      const response =
+        await fetch(
+          `/api/creator/cpmm-fees?wallet=${encodeURIComponent(
+            publicKey.toBase58(),
+          )}`,
+          {
+            cache: "no-store",
+          },
+        );
+
+      const payload =
+        (await response.json()) as
+          CpmmCreatorFeeResponse & {
+            error?: string;
+          };
+
+      if (!response.ok) {
+        throw new Error(
+          payload.error ||
+            `Unable to load ${NETWORK_LABEL} CPMM creator fees.`,
+        );
+      }
+
+      setCpmmCreatorFees(
+        Array.isArray(payload.data)
+          ? payload.data
+          : [],
+      );
+    } catch (error) {
+      console.error(
+        "Unable to discover CPMM creator fees:",
+        error,
+      );
+
+      setCpmmCreatorFees([]);
+
+      setStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unable to load Raydium CPMM creator fees.",
+      });
+    } finally {
+      setCpmmCreatorFeesLoading(false);
+    }
+  }
+
+  async function claimCpmmCreatorFees(
+    entry: CpmmCreatorFeeEntry,
+  ) {
+    if (
+      !connected ||
+      !publicKey ||
+      !signTransaction ||
+      !signAllTransactions
+    ) {
+      setStatus({
+        kind: "error",
+        message:
+          `Connect the creator wallet on ${NETWORK_LABEL} first.`,
+      });
+      return;
+    }
+
+    try {
+      setClaimingCpmmPool(
+        entry.poolInfo.id,
+      );
+
+      setStatus({
+        kind: "working",
+        message:
+          `Loading the graduated Raydium CPMM pool on ${NETWORK_LABEL}...`,
+      });
+
+      const raydium =
+        await loadKodiakRaydium({
+          connection,
+          owner:
+            publicKey,
+          signTransaction,
+          signAllTransactions,
+        });
+
+      let poolInfo: unknown =
+        entry.poolInfo;
+
+      let poolKeys:
+        | unknown
+        | undefined;
+
+      if (KODIAK_IS_DEVNET) {
+        const rpcPool =
+          await raydium.cpmm.getPoolInfoFromRpc(
+            entry.poolInfo.id,
+          );
+
+        assertCorrectCpmmPoolProgram(
+          rpcPool.poolInfo
+            .programId,
+        );
+
+        poolInfo =
+          rpcPool.poolInfo;
+
+        poolKeys =
+          rpcPool.poolKeys;
+      } else {
+        assertCorrectCpmmPoolProgram(
+          entry.poolInfo
+            .programId,
+        );
+      }
+
+      const cpmm =
+        raydium.cpmm as unknown as {
+          collectCreatorFees: (
+            params: {
+              programId?:
+                PublicKey;
+              poolInfo:
+                unknown;
+              poolKeys?:
+                unknown;
+              txVersion:
+                TxVersion;
+            },
+          ) => Promise<{
+            transaction:
+              unknown;
+            signers?:
+              unknown[];
+          }>;
+        };
+
+      setStatus({
+        kind: "working",
+        message:
+          "Building the Raydium CPMM creator-fee claim...",
+      });
+
+      const built =
+        await cpmm.collectCreatorFees({
+          programId:
+            KODIAK_IS_DEVNET
+              ? DEVNET_PROGRAM_ID
+                  .CREATE_CPMM_POOL_PROGRAM
+              : undefined,
+          poolInfo,
+          poolKeys,
+          txVersion:
+            TxVersion.V0,
+        });
+
+      if (
+        !(
+          built.transaction instanceof
+          VersionedTransaction
+        )
+      ) {
+        throw new Error(
+          "Kodiak expected Raydium to build a versioned CPMM creator-fee transaction.",
+        );
+      }
+
+      const extraSigners =
+        Array.isArray(
+          built.signers,
+        )
+          ? built.signers
+          : [];
+
+      if (
+        extraSigners.length !==
+        0
+      ) {
+        throw new Error(
+          `Kodiak stopped the CPMM creator-fee claim because Raydium returned ${extraSigners.length} additional signer(s). No transaction was sent to the wallet.`,
+        );
+      }
+
+      setStatus({
+        kind: "working",
+        message:
+          `Simulating the ${NETWORK_LABEL} CPMM creator-fee claim before wallet approval...`,
+      });
+
+      const signature =
+        await sendWalletFirstTransaction(
+          built.transaction,
+        );
+
+      await discoverCpmmCreatorFees();
+
+      setStatus({
+        kind: "success",
+        message:
+          `Raydium confirmed the post-graduation CPMM creator-fee claim on ${NETWORK_LABEL}.`,
+        signature,
+      });
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "The CPMM creator-fee claim failed.",
+      });
+    } finally {
+      setClaimingCpmmPool(
+        null,
+      );
+    }
+  }
+
   useEffect(() => {
     const timer =
       window.setTimeout(
         () => {
           void refreshClaimableBalance();
-          void discoverFeeKeys();
+          void discoverCpmmCreatorFees();
         },
         0,
       );
@@ -1007,7 +1325,7 @@ export function ClaimCreatorRewards() {
           </h2>
 
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
-            Kodiak reads both Raydium creator reward phases: the LaunchLab creator vault before graduation and Fee Key NFT positions after graduation.
+            Kodiak reads both Raydium creator reward phases: the LaunchLab creator vault before graduation and direct CPMM creator fees after graduation.
           </p>
         </div>
 
@@ -1060,7 +1378,7 @@ export function ClaimCreatorRewards() {
             </p>
 
             <h3 className="mt-2 text-lg font-black">
-              Fee Key Rewards
+              Creator Fees
             </h3>
           </div>
 
@@ -1068,56 +1386,55 @@ export function ClaimCreatorRewards() {
             type="button"
             disabled={
               !connected ||
-              feeKeysLoading ||
+              cpmmCreatorFeesLoading ||
               busy
             }
             onClick={() =>
-              void discoverFeeKeys()
+              void discoverCpmmCreatorFees()
             }
             className="rounded-xl border border-amber-300/25 px-3 py-2 text-xs font-black text-amber-300 disabled:opacity-40"
           >
-            {feeKeysLoading
-              ? "Scanning..."
-              : "Refresh Fee Keys"}
+            {cpmmCreatorFeesLoading
+              ? "Refreshing..."
+              : "Refresh CPMM Fees"}
           </button>
         </div>
 
         {!connected ? (
           <p className="mt-4 text-sm text-zinc-500">
-            Connect the wallet that holds the creator Fee Key NFT.
+            Connect the launch creator wallet to read its Raydium CPMM creator fees.
           </p>
-        ) : feeKeysLoading ? (
+        ) : cpmmCreatorFeesLoading ? (
           <p className="mt-4 text-sm text-zinc-500">
-            Scanning this wallet for Raydium CPMM Fee Keys...
+            Reading Raydium&apos;s creator-fee index for this wallet...
           </p>
-        ) : feeKeys.length ===
+        ) : cpmmCreatorFees.length ===
           0 ? (
           <p className="mt-4 text-sm leading-6 text-zinc-500">
-            No Raydium CPMM Fee Key positions were discovered in this wallet. That is expected until one of its eligible launches graduates and the Fee Key NFT is minted.
+            No Raydium CPMM creator-fee pools were returned for this wallet.
           </p>
         ) : (
           <div className="mt-4 grid gap-3">
-            {feeKeys.map(
+            {cpmmCreatorFees.map(
               (
-                position,
+                entry,
               ) => {
                 const {
                   poolInfo,
-                  positionInfo,
+                  fee,
                 } =
-                  position.info;
+                  entry;
 
                 const hasFees =
-                  Number(
-                    positionInfo
-                      .unclaimedFee
-                      .lp,
-                  ) > 0;
+                  fee.amountA !==
+                    "0" ||
+                  fee.amountB !==
+                    "0";
 
                 return (
                   <div
                     key={
-                      position.nftMint
+                      poolInfo.id
                     }
                     className="rounded-2xl border border-white/10 bg-black/25 p-4"
                   >
@@ -1144,58 +1461,52 @@ export function ClaimCreatorRewards() {
                         </p>
 
                         <p className="mt-1 break-all text-xs text-zinc-600">
-                          Fee Key:{" "}
+                          CPMM pool:{" "}
                           {
-                            position.nftMint
+                            poolInfo.id
                           }
                         </p>
 
                         <div className="mt-3 grid gap-1 text-sm">
                           <p>
-                            Token A fees:{" "}
+                            {tokenLabel(
+                              poolInfo
+                                .mintA
+                                .symbol,
+                              poolInfo
+                                .mintA
+                                .address,
+                            )}{" "}
+                            fees:{" "}
                             <span className="font-black text-amber-200">
-                              {Number(
-                                positionInfo
-                                  .unclaimedFee
-                                  .amountA ||
-                                  0,
-                              ).toLocaleString()}
+                              {formatRawTokenAmount(
+                                fee.amountA,
+                                poolInfo
+                                  .mintA
+                                  .decimals,
+                              )}
                             </span>
                           </p>
 
                           <p>
-                            Token B fees:{" "}
+                            {tokenLabel(
+                              poolInfo
+                                .mintB
+                                .symbol,
+                              poolInfo
+                                .mintB
+                                .address,
+                            )}{" "}
+                            fees:{" "}
                             <span className="font-black text-amber-200">
-                              {Number(
-                                positionInfo
-                                  .unclaimedFee
-                                  .amountB ||
-                                  0,
-                              ).toLocaleString()}
+                              {formatRawTokenAmount(
+                                fee.amountB,
+                                poolInfo
+                                  .mintB
+                                  .decimals,
+                              )}
                             </span>
                           </p>
-
-                          {Number.isFinite(
-                            positionInfo
-                              .unclaimedFee
-                              .usdValue,
-                          ) && (
-                            <p className="text-xs text-zinc-500">
-                              Estimated value: $
-                              {Number(
-                                positionInfo
-                                  .unclaimedFee
-                                  .usdValue ||
-                                  0,
-                              ).toLocaleString(
-                                "en-US",
-                                {
-                                  maximumFractionDigits:
-                                    2,
-                                },
-                              )}
-                            </p>
-                          )}
                         </div>
                       </div>
 
@@ -1206,14 +1517,14 @@ export function ClaimCreatorRewards() {
                           !hasFees
                         }
                         onClick={() =>
-                          void claimFeeKey(
-                            position,
+                          void claimCpmmCreatorFees(
+                            entry,
                           )
                         }
                         className="shrink-0 rounded-xl bg-amber-300 px-4 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
                       >
-                        {claimingFeeKey ===
-                        position.nftMint
+                        {claimingCpmmPool ===
+                        poolInfo.id
                           ? "Claiming..."
                           : hasFees
                             ? "Claim CPMM Fees"
@@ -1262,7 +1573,7 @@ export function ClaimCreatorRewards() {
       </div>
 
       <p className="mt-4 text-xs leading-5 text-zinc-600">
-        Fee Key ownership is checked from the connected wallet each time. If the NFT is transferred, the claim right moves with it.
+        Post-graduation rewards use Raydium's CPMM creator-fee system and are read for the connected launch creator wallet.
       </p>
     </section>
   );

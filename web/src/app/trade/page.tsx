@@ -2876,7 +2876,9 @@ const signature =
           )}
         </section>
 
-        {poolIdText && (
+        {(graduationState?.trading.graduated
+          ? graduationState.cpmmPoolId
+          : poolIdText) && (
           <section className="rounded-3xl border border-white/10 bg-white/[0.03] p-6 text-sm">
             <h2 className="text-xl font-black">
               Live quote
@@ -2908,13 +2910,22 @@ const signature =
 
             <div className="mt-5">
               <p className="text-zinc-500">
-                LaunchLab pool
+                {graduationState?.trading.graduated
+                  ? "Raydium CPMM pool"
+                  : "LaunchLab pool"}
               </p>
               <p className="mt-1 break-all font-mono text-xs">
-                {poolIdText}
+                {graduationState?.trading.graduated
+                  ? graduationState.cpmmPoolId
+                  : poolIdText}
               </p>
               <a
-                href={kodiakExplorerAddressUrl(poolIdText)}
+                href={kodiakExplorerAddressUrl(
+                  graduationState?.trading.graduated &&
+                    graduationState.cpmmPoolId
+                    ? graduationState.cpmmPoolId
+                    : poolIdText,
+                )}
                 target="_blank"
                 rel="noreferrer"
                 className="mt-3 inline-block font-black text-amber-300"

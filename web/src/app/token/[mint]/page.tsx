@@ -652,13 +652,13 @@ export default function TokenPage() {
                   label="Status"
                   value={
                     graduation?.trading.graduated
-                      ? "Verified Â· Graduated"
+                      ? "Verified - Graduated"
                       : graduation?.trading.migrationPending
-                        ? "Verified Â· Migrating"
+                        ? "Verified - Migrating"
                         : graduation?.trading.graduationReady
-                          ? "Verified Â· Graduation ready"
+                          ? "Verified - Graduation ready"
                           : graduation?.trading.cancelled
-                            ? "Verified Â· Cancelled"
+                            ? "Verified - Cancelled"
                             : "Verified launch"
                   }
                 />

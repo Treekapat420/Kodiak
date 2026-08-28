@@ -394,6 +394,33 @@ export async function GET(
       }
     }
 
+    // Persist the verified CPMM mapping at the moment Kodiak discovers it.
+    // Creator Rewards can then use the launch record directly and never needs
+    // to rediscover the pool from PlatformConfig or historical launch RPCs.
+    if (rawStatus === 2 && cpmmPoolId) {
+      try {
+        const redis = getRedis();
+        const key = KODIAK_IS_DEVNET
+          ? `kodiak:launch:${mintA.toBase58()}`
+          : `kodiak:mainnet:launch:${mintA.toBase58()}`;
+        const existing = await redis.get<Record<string, unknown>>(key);
+        if (existing && typeof existing === "object") {
+          await redis.set(key, {
+            ...existing,
+            network: KODIAK_NETWORK,
+            cpmmPoolId: cpmmPoolId.toBase58(),
+            cpConfigId: cpConfigId?.toBase58() ?? null,
+            graduatedAt:
+              typeof existing.graduatedAt === "string"
+                ? existing.graduatedAt
+                : new Date().toISOString(),
+          });
+        }
+      } catch (persistError) {
+        console.warn("Unable to persist Kodiak CPMM mapping:", persistError);
+      }
+    }
+
     const state =
       statusLabel(
         rawStatus,

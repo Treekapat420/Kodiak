@@ -1049,6 +1049,11 @@ export function ClaimCreatorRewards() {
         );
       }
 
+      // Capture the narrowed value locally. TypeScript does not preserve
+      // instanceof narrowing reliably through a mutable object property.
+      const creatorFeeTransaction: VersionedTransaction =
+        built.transaction;
+
       const extraSigners =
         Array.isArray(
           built.signers,
@@ -1073,7 +1078,7 @@ export function ClaimCreatorRewards() {
 
       const signature =
         await sendWalletFirstTransaction(
-          built.transaction,
+          creatorFeeTransaction,
         );
 
       await discoverCpmmCreatorFees();
@@ -1199,6 +1204,11 @@ export function ClaimCreatorRewards() {
         );
       }
 
+      // Capture the narrowed value locally. TypeScript does not preserve
+      // instanceof narrowing reliably through a mutable object property.
+      const creatorFeeTransaction: VersionedTransaction =
+        built.transaction;
+
       const extraSigners =
         Array.isArray(
           built.signers,
@@ -1217,7 +1227,7 @@ export function ClaimCreatorRewards() {
 
       const signature =
         await sendWalletFirstTransaction(
-          built.transaction,
+          creatorFeeTransaction,
         );
 
       setStatus({

@@ -750,7 +750,7 @@ export function ClaimCreatorRewards() {
 
       const launchesResponse =
         await fetch(
-          `/api/creator/launches?creator=${encodeURIComponent(
+          `/api/creator/dashboard?wallet=${encodeURIComponent(
             publicKey.toBase58(),
           )}`,
           {

@@ -255,6 +255,8 @@ export default function TradePage() {
     useState<number | null>(null);
   const [tokenDecimals, setTokenDecimals] =
     useState<number | null>(null);
+  const [mintTokenProgramId, setMintTokenProgramId] =
+    useState<PublicKey | null>(null);
   const [estimatedSellSol, setEstimatedSellSol] =
     useState<string | null>(null);
   const [graduationState, setGraduationState] =
@@ -311,6 +313,7 @@ export default function TradePage() {
     if (!publicKey || !mintIsValid) {
       setTokenBalance(null);
       setTokenDecimals(null);
+      setMintTokenProgramId(null);
       return;
     }
 
@@ -347,6 +350,10 @@ export default function TradePage() {
           throw new Error(
             `Unsupported token program for mint ${mintA.toBase58()}: ${mintAccount.owner.toBase58()}`,
           );
+        }
+
+        if (!cancelled) {
+          setMintTokenProgramId(tokenProgramId);
         }
 
         const ownerAta = getAssociatedTokenAddressSync(
@@ -418,6 +425,7 @@ export default function TradePage() {
            */
           setTokenBalance(null);
           setTokenDecimals(null);
+          setMintTokenProgramId(null);
         }
       }
     })();
@@ -1855,10 +1863,11 @@ const signature =
       const kodiakPlatformId =
         await getKodiakPlatformId();
 
-      const mintInfo =
-        await raydium.token.getTokenInfo(
-          mintA,
+      if (!mintTokenProgramId) {
+        throw new Error(
+          "Kodiak has not finished verifying this token's SPL program yet. Refresh the token balance and try again.",
         );
+      }
 
       const buildBondingBuy =
         async () => {
@@ -1894,9 +1903,7 @@ const signature =
               KODIAK_LAUNCHPAD_PROGRAM_ID,
             mintA,
             mintAProgram:
-              new PublicKey(
-                mintInfo.programId,
-              ),
+              mintTokenProgramId,
             poolInfo,
             slippage:
               TRADE_SLIPPAGE,
@@ -2291,10 +2298,11 @@ const signature =
       const kodiakPlatformId =
         await getKodiakPlatformId();
 
-      const mintInfo =
-        await raydium.token.getTokenInfo(
-          mintA,
+      if (!mintTokenProgramId) {
+        throw new Error(
+          "Kodiak has not finished verifying this token's SPL program yet. Refresh the token balance and try again.",
         );
+      }
 
       /*
        * IMPORTANT:
@@ -2340,9 +2348,7 @@ const signature =
               KODIAK_LAUNCHPAD_PROGRAM_ID,
             mintA,
             mintAProgram:
-              new PublicKey(
-                mintInfo.programId,
-              ),
+              mintTokenProgramId,
             mintB:
               NATIVE_MINT,
             poolInfo,

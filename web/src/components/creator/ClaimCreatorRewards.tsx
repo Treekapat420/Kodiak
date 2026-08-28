@@ -183,6 +183,71 @@ function friendlyMintSymbol(address: string, fallback?: string): string {
   return fallback || `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+const CPMM_POOL_CACHE_VERSION = 1;
+
+type CachedCpmmPool = Pick<KnownCpmmPool, "mint" | "name" | "symbol" | "poolId">;
+
+function cpmmPoolCacheKey(wallet: string): string {
+  return `kodiak:${NETWORK_LABEL.toLowerCase()}:creator:${wallet}:cpmm-pools:v${CPMM_POOL_CACHE_VERSION}`;
+}
+
+function readCachedCpmmPools(wallet: string): CachedCpmmPool[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = window.localStorage.getItem(cpmmPoolCacheKey(wallet));
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.filter((item): item is CachedCpmmPool => {
+      if (!item || typeof item !== "object") return false;
+      const candidate = item as Partial<CachedCpmmPool>;
+      return (
+        typeof candidate.mint === "string" &&
+        typeof candidate.name === "string" &&
+        typeof candidate.symbol === "string" &&
+        typeof candidate.poolId === "string"
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedCpmmPools(wallet: string, pools: KnownCpmmPool[]): void {
+  if (typeof window === "undefined") return;
+
+  const lean: CachedCpmmPool[] = pools.map((pool) => ({
+    mint: pool.mint,
+    name: pool.name,
+    symbol: pool.symbol,
+    poolId: pool.poolId,
+  }));
+
+  window.localStorage.setItem(cpmmPoolCacheKey(wallet), JSON.stringify(lean));
+}
+
+async function fetchJsonWithTimeout(
+  input: string,
+  timeoutMs: number,
+): Promise<{ response: Response; payload: unknown }> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(input, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const payload = await response.json();
+    return { response, payload };
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 const NETWORK_LABEL = kodiakNetworkLabel();
 
 /*
@@ -764,95 +829,137 @@ export function ClaimCreatorRewards() {
     }
   }
 
-  async function discoverKnownCpmmPools() {
+  async function hydrateKnownCpmmPool(
+    base: CachedCpmmPool,
+  ): Promise<KnownCpmmPool> {
+    if (!publicKey) {
+      throw new Error("Connect the creator wallet first.");
+    }
+
+    const accountInfo = await connection.getAccountInfo(
+      new PublicKey(base.poolId),
+      "confirmed",
+    );
+
+    if (!accountInfo) {
+      throw new Error(`CPMM pool ${base.poolId} was not found on ${NETWORK_LABEL}.`);
+    }
+
+    if (accountInfo.data.length < 413) {
+      return { ...base };
+    }
+
+    const data = new Uint8Array(accountInfo.data);
+    const poolCreator = new PublicKey(data.slice(40, 72));
+    const creatorFee0 = readU64LE(data, 397);
+    const creatorFee1 = readU64LE(data, 405);
+
+    const raydium = await loadKodiakRaydium({
+      connection,
+      owner: publicKey,
+      signTransaction: raydiumSignTransaction,
+      signAllTransactions: raydiumSignAllTransactions,
+    });
+
+    const rpcPool = await raydium.cpmm.getPoolInfoFromRpc(base.poolId);
+    assertCorrectCpmmPoolProgram(rpcPool.poolInfo.programId);
+
+    const mintA = rpcPool.poolInfo.mintA.address;
+    const mintB = rpcPool.poolInfo.mintB.address;
+    const decimalsA = rpcPool.poolInfo.mintA.decimals;
+    const decimalsB = rpcPool.poolInfo.mintB.decimals;
+
+    return {
+      ...base,
+      creatorMatches: poolCreator.equals(publicKey),
+      feeA: formatRawAmount(creatorFee0, decimalsA),
+      feeB: formatRawAmount(creatorFee1, decimalsB),
+      feeARaw: creatorFee0.toString(),
+      feeBRaw: creatorFee1.toString(),
+      mintA,
+      mintB,
+      symbolA: friendlyMintSymbol(mintA, rpcPool.poolInfo.mintA.symbol),
+      symbolB: friendlyMintSymbol(mintB, rpcPool.poolInfo.mintB.symbol),
+    };
+  }
+
+  async function discoverKnownCpmmPools(forceRescan = false) {
     if (!publicKey) {
       setKnownCpmmPools([]);
       setCpmmDiscoveryDiagnostics([]);
       return [];
     }
 
-    const diagnostics: CpmmDiscoveryDiagnostic[] = [];
-    const addDiagnostic = (
-      step: string,
-      detail: string,
-      launch?: KodiakLaunchRecord,
-    ) => {
-      diagnostics.push({
-        mint: launch?.mint,
-        symbol: launch?.symbol,
-        step,
-        detail,
-      });
-    };
+    const wallet = publicKey.toBase58();
 
     try {
       setKnownCpmmPoolsLoading(true);
       setCpmmDiscoveryDiagnostics([]);
 
-      const wallet = publicKey.toBase58();
-      addDiagnostic(
-        "Connected wallet",
-        wallet,
-      );
+      // Fast path: once Kodiak has positively discovered a creator's graduated
+      // CPMM pool, future refreshes go straight to that pool account. This avoids
+      // repeatedly calling every historical launch's graduation endpoint.
+      if (!forceRescan) {
+        const cached = readCachedCpmmPools(wallet);
 
-      const launchesResponse = await fetch(
+        if (cached.length > 0) {
+          const hydrated: KnownCpmmPool[] = [];
+
+          for (const pool of cached) {
+            try {
+              hydrated.push(await hydrateKnownCpmmPool(pool));
+            } catch (error) {
+              console.warn(`Cached CPMM pool ${pool.poolId} could not be refreshed:`, error);
+            }
+          }
+
+          if (hydrated.length > 0) {
+            setKnownCpmmPools(hydrated);
+            return hydrated;
+          }
+
+          window.localStorage.removeItem(cpmmPoolCacheKey(wallet));
+        }
+      }
+
+      // No valid cached pool exists yet. Discover it from Kodiak's creator
+      // dashboard once, then persist the verified mint -> CPMM pool mapping.
+      const dashboardResult = await fetchJsonWithTimeout(
         `/api/creator/dashboard?wallet=${encodeURIComponent(wallet)}`,
-        { cache: "no-store" },
+        8000,
       );
-
-      const launchesPayload =
-        (await launchesResponse.json()) as {
-          launches?: KodiakLaunchRecord[];
-          network?: string;
-          wallet?: string;
-          error?: string;
-        };
-
-      addDiagnostic(
-        "Dashboard response",
-        `HTTP ${launchesResponse.status}; network=${launchesPayload.network || "unknown"}; wallet=${launchesPayload.wallet || "unknown"}`,
-      );
+      const launchesResponse = dashboardResult.response;
+      const launchesPayload = dashboardResult.payload as {
+        launches?: KodiakLaunchRecord[];
+        error?: string;
+      };
 
       if (!launchesResponse.ok) {
         throw new Error(
-          launchesPayload.error ||
-            "Unable to load this creator's Kodiak launches.",
+          launchesPayload.error || "Unable to load this creator's Kodiak launches.",
         );
       }
 
       const launches = Array.isArray(launchesPayload.launches)
         ? launchesPayload.launches
         : [];
+      const pools: KnownCpmmPool[] = [];
 
-      addDiagnostic(
-        "Dashboard launches",
-        `${launches.length} launch record(s) returned${
-          launches.length > 0
-            ? `: ${launches
-                .map((launch) => `${launch.symbol} (${launch.mint})`)
-                .join(", ")}`
-            : ""
-        }`,
-      );
-
-      // Check launches sequentially instead of hammering Devnet RPC in parallel.
-      // The graduation endpoint itself performs RPC work, and parallel checks across
-      // historical test launches were causing intermittent 429 responses.
-      const results: Array<KnownCpmmPool | null> = [];
-
+      // Discovery is bounded. Each graduation request has its own timeout and
+      // only one retry for a 429. A bad historical test launch cannot leave the
+      // whole Creator Rewards page spinning for minutes.
       for (const launch of launches) {
-        let accepted: KnownCpmmPool | null = null;
-
         try {
-          let response: Response | null = null;
           let payload: KodiakGraduationResponse = {};
+          let response: Response | null = null;
 
-          for (let attempt = 0; attempt < 3; attempt += 1) {
-            response = await fetch(
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            const result = await fetchJsonWithTimeout(
               `/api/token/${encodeURIComponent(launch.mint)}/graduation`,
-              { cache: "no-store" },
+              5000,
             );
-            payload = (await response.json()) as KodiakGraduationResponse;
+            response = result.response;
+            payload = result.payload as KodiakGraduationResponse;
 
             const rateLimited =
               !response.ok &&
@@ -860,10 +967,8 @@ export function ClaimCreatorRewards() {
               (payload.error.includes("429") ||
                 payload.error.toLowerCase().includes("too many requests"));
 
-            if (!rateLimited || attempt === 2) break;
-            await new Promise((resolve) =>
-              window.setTimeout(resolve, 500 * (attempt + 1)),
-            );
+            if (!rateLimited || attempt === 1) break;
+            await new Promise((resolve) => window.setTimeout(resolve, 600));
           }
 
           if (
@@ -872,88 +977,29 @@ export function ClaimCreatorRewards() {
             payload.trading?.cpmmReady &&
             payload.cpmmPoolId
           ) {
-            const poolId = payload.cpmmPoolId;
-            const accountInfo = await connection.getAccountInfo(
-              new PublicKey(poolId),
-              "confirmed",
-            );
-
-            if (accountInfo && accountInfo.data.length >= 413) {
-              const data = new Uint8Array(accountInfo.data);
-              const poolCreator = new PublicKey(data.slice(40, 72));
-              const creatorFee0 = readU64LE(data, 397);
-              const creatorFee1 = readU64LE(data, 405);
-
-              const raydium = await loadKodiakRaydium({
-                connection,
-                owner: publicKey,
-                signTransaction: raydiumSignTransaction,
-                signAllTransactions: raydiumSignAllTransactions,
-              });
-              const rpcPool = await raydium.cpmm.getPoolInfoFromRpc(poolId);
-              assertCorrectCpmmPoolProgram(rpcPool.poolInfo.programId);
-
-              const mintA = rpcPool.poolInfo.mintA.address;
-              const mintB = rpcPool.poolInfo.mintB.address;
-              const decimalsA = rpcPool.poolInfo.mintA.decimals;
-              const decimalsB = rpcPool.poolInfo.mintB.decimals;
-
-              accepted = {
-                mint: launch.mint,
-                name: launch.name,
-                symbol: launch.symbol,
-                poolId,
-                creatorMatches: poolCreator.equals(publicKey),
-                feeA: formatRawAmount(creatorFee0, decimalsA),
-                feeB: formatRawAmount(creatorFee1, decimalsB),
-                feeARaw: creatorFee0.toString(),
-                feeBRaw: creatorFee1.toString(),
-                mintA,
-                mintB,
-                symbolA: friendlyMintSymbol(mintA, rpcPool.poolInfo.mintA.symbol),
-                symbolB: friendlyMintSymbol(mintB, rpcPool.poolInfo.mintB.symbol),
-              };
-            } else if (accountInfo) {
-              accepted = {
-                mint: launch.mint,
-                name: launch.name,
-                symbol: launch.symbol,
-                poolId,
-              };
-            }
+            const hydrated = await hydrateKnownCpmmPool({
+              mint: launch.mint,
+              name: launch.name,
+              symbol: launch.symbol,
+              poolId: payload.cpmmPoolId,
+            });
+            pools.push(hydrated);
           }
         } catch (error) {
-          console.warn(
-            `Kodiak CPMM discovery skipped ${launch.symbol}:`,
-            error,
-          );
+          console.warn(`Kodiak CPMM discovery skipped ${launch.symbol}:`, error);
         }
-
-        results.push(accepted);
-        // Small spacing between historical launch checks keeps public Devnet RPC
-        // from being flooded even when the creator has many old test launches.
-        await new Promise((resolve) => window.setTimeout(resolve, 175));
       }
 
-      const pools = results.filter(
-        (item): item is KnownCpmmPool => Boolean(item),
-      );
-
-      addDiagnostic(
-        "Discovery result",
-        `${pools.length} graduated CPMM pool(s) accepted.`,
-      );
-
       setKnownCpmmPools(pools);
-      setCpmmDiscoveryDiagnostics([...diagnostics]);
+
+      if (pools.length > 0) {
+        writeCachedCpmmPools(wallet, pools);
+      }
+
       return pools;
     } catch (error) {
-      addDiagnostic(
-        "Discovery failed",
-        error instanceof Error ? error.message : String(error),
-      );
+      console.error("Unable to discover Kodiak CPMM pools:", error);
       setKnownCpmmPools([]);
-      setCpmmDiscoveryDiagnostics([...diagnostics]);
       return [];
     } finally {
       setKnownCpmmPoolsLoading(false);
@@ -969,71 +1015,36 @@ export function ClaimCreatorRewards() {
 
     setStatus({
       kind: "working",
-      message:
-        `Checking ${NETWORK_LABEL} CPMM creator fees and Kodiak's graduated pools...`,
+      message: `Checking ${NETWORK_LABEL} CPMM creator fees...`,
     });
-
-    const pools =
-      await discoverKnownCpmmPools();
 
     try {
       setCpmmCreatorFeesLoading(true);
-
-      const response =
-        await fetch(
-          `/api/creator/cpmm-fees?wallet=${encodeURIComponent(
-            publicKey.toBase58(),
-          )}`,
-          {
-            cache: "no-store",
-          },
-        );
-
-      const payload =
-        (await response.json()) as
-          CpmmCreatorFeeResponse & {
-            error?: string;
-          };
-
-      if (!response.ok) {
-        throw new Error(
-          payload.error ||
-            `Unable to load ${NETWORK_LABEL} CPMM creator fees.`,
-        );
-      }
-
-      setCpmmCreatorFees(
-        Array.isArray(payload.data)
-          ? payload.data
-          : [],
-      );
-
-      setStatus({
-        kind: "idle",
-        message: "",
-      });
-    } catch (error) {
-      console.error(
-        "Raydium CPMM creator-fee index unavailable; using Kodiak known-pool fallback:",
-        error,
-      );
-
-      setCpmmCreatorFees([]);
+      const pools = await discoverKnownCpmmPools();
 
       if (pools.length > 0) {
-        setStatus({
-          kind: "idle",
-          message: "",
-        });
-      } else {
-        setStatus({
-          kind: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Unable to load Raydium CPMM creator fees.",
-        });
+        // Kodiak has the exact graduated pool(s), and their creator-fee counters
+        // were just read directly from PoolState. The Raydium temp index is not
+        // needed for this path and cannot block or overwrite the on-chain result.
+        setCpmmCreatorFees([]);
+        setStatus({ kind: "idle", message: "" });
+        return;
       }
+
+      setCpmmCreatorFees([]);
+      setStatus({
+        kind: "idle",
+        message: "No graduated Kodiak CPMM pools were found for this connected creator wallet.",
+      });
+    } catch (error) {
+      console.error("Unable to refresh CPMM creator fees:", error);
+      setCpmmCreatorFees([]);
+      setStatus({
+        kind: "error",
+        message: error instanceof Error
+          ? error.message
+          : "Unable to refresh CPMM creator fees.",
+      });
     } finally {
       setCpmmCreatorFeesLoading(false);
     }
@@ -1890,7 +1901,10 @@ export function ClaimCreatorRewards() {
           className="shrink-0 rounded-xl bg-emerald-400 px-5 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
         >
           {busy &&
-          !claimingFeeKey
+          !claimingFeeKey &&
+          !claimingCpmmPool &&
+          !cpmmCreatorFeesLoading &&
+          !knownCpmmPoolsLoading
             ? "Claiming..."
             : claimableSol !== null && claimableSol <= 0
               ? "No Curve Rewards to Claim"

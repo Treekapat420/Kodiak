@@ -149,8 +149,21 @@ type CpmmDiscoveryDiagnostic = {
   detail: string;
 };
 
-function readU64LE(data: Buffer, offset: number): bigint {
-  return data.readBigUInt64LE(offset);
+function readU64LE(data: Uint8Array, offset: number): bigint {
+  if (offset < 0 || offset + 8 > data.length) {
+    throw new RangeError(`Cannot read u64 at offset ${offset} from ${data.length} bytes.`);
+  }
+
+  let value = BigInt(0);
+  let multiplier = BigInt(1);
+  const base = BigInt(256);
+
+  for (let index = 0; index < 8; index += 1) {
+    value += BigInt(data[offset + index]) * multiplier;
+    multiplier *= base;
+  }
+
+  return value;
 }
 
 function formatRawAmount(raw: bigint, decimals: number): string {
@@ -928,8 +941,12 @@ export function ClaimCreatorRewards() {
                 };
               }
 
-              const data = Buffer.from(accountInfo.data);
-              const poolCreator = new PublicKey(data.subarray(40, 72));
+              // Solana web3 may expose account bytes as Buffer in Node and as a
+              // browser-compatible Uint8Array in the client bundle. Keep the
+              // decoder independent of Node Buffer methods so this works in
+              // Phantom/Safari as well as during server-side tooling.
+              const data = new Uint8Array(accountInfo.data);
+              const poolCreator = new PublicKey(data.slice(40, 72));
               const creatorFee0 = readU64LE(data, 397);
               const creatorFee1 = readU64LE(data, 405);
 

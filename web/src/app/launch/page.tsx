@@ -63,6 +63,9 @@ const storageKey =
 const lastLaunchStorageKey =
   `kodiak-last-${KODIAK_NETWORK}-launch`;
 
+const pendingLaunchStorageKey =
+  `kodiak-pending-${KODIAK_NETWORK}-launch`;
+
 const initialForm: FormState = {
   name: "",
   symbol: "",
@@ -137,6 +140,9 @@ export default function LaunchPage() {
     | { kind: "success"; message: string; mint: string; signatures: string[] }
     | { kind: "error"; message: string; logs?: string[]; code?: string; action?: string; technical?: string }
   >({ kind: "idle", message: `Ready to prepare a ${NETWORK_LABEL} launch.` });
+
+  const [recoveryWorking, setRecoveryWorking] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const restoreTimer = window.setTimeout(() => {
@@ -270,6 +276,278 @@ export default function LaunchPage() {
       type: blob.type || "image/png",
     });
   };
+
+
+  async function waitForSubmittedSignature(
+    signature: string,
+    timeoutMs = 30_000,
+  ): Promise<"confirmed" | "failed" | "unknown"> {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      try {
+        const response = await connection.getSignatureStatuses(
+          [signature],
+          {
+            searchTransactionHistory: true,
+          },
+        );
+
+        const status = response.value[0];
+
+        if (status) {
+          if (status.err) {
+            return "failed";
+          }
+
+          if (
+            status.confirmationStatus === "confirmed" ||
+            status.confirmationStatus === "finalized"
+          ) {
+            return "confirmed";
+          }
+        }
+      } catch (statusError) {
+        console.warn(
+          "Kodiak could not read submitted signature status yet:",
+          statusError,
+        );
+      }
+
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, 1200),
+      );
+    }
+
+    return "unknown";
+  }
+
+  async function registerVerifiedLaunch({
+    mint,
+    launchSignature,
+    signatures,
+    createdAt,
+    name,
+    symbol,
+  }: {
+    mint: string;
+    launchSignature: string;
+    signatures: string[];
+    createdAt: string;
+    name: string;
+    symbol: string;
+  }) {
+    if (!publicKey) {
+      throw new Error("Connect the creator wallet first.");
+    }
+
+    const registrationResponse = await fetch(
+      "/api/creator/launches",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mint,
+          creator: publicKey.toBase58(),
+          name,
+          symbol,
+          signature: launchSignature,
+          createdAt,
+        }),
+      },
+    );
+
+    const registrationPayload =
+      (await registrationResponse.json().catch(() => null)) as
+        | {
+            launch?: { mint: string };
+            error?: string;
+          }
+        | null;
+
+    if (
+      !registrationResponse.ok ||
+      !registrationPayload?.launch
+    ) {
+      throw new Error(
+        registrationPayload?.error ||
+          "The token exists on-chain, but Creator Dashboard registration failed.",
+      );
+    }
+
+    window.localStorage.setItem(
+      lastLaunchStorageKey,
+      JSON.stringify({
+        network: KODIAK_NETWORK,
+        mint,
+        signatures,
+        name,
+        symbol,
+        creator: publicKey.toBase58(),
+        createdAt,
+      }),
+    );
+
+    window.localStorage.removeItem(
+      pendingLaunchStorageKey,
+    );
+
+    return registrationPayload.launch;
+  }
+
+  async function recoverLatestOnChainLaunch() {
+    if (!publicKey) {
+      setRecoveryMessage("Connect the creator wallet first.");
+      return;
+    }
+
+    const name = form.name.trim();
+    const symbol = form.symbol
+      .replace("$", "")
+      .trim()
+      .toUpperCase();
+
+    if (!name || !symbol) {
+      setRecoveryMessage(
+        "Keep the launched token's name and symbol in the form, then try recovery again.",
+      );
+      return;
+    }
+
+    setRecoveryWorking(true);
+    setRecoveryMessage(
+      `Checking the creator wallet for the latest successful ${NETWORK_LABEL} LaunchLab creation...`,
+    );
+
+    try {
+      let candidate:
+        | {
+            mint: string;
+            signature: string;
+            createdAt?: string;
+          }
+        | null = null;
+
+      const pendingRaw =
+        window.localStorage.getItem(
+          pendingLaunchStorageKey,
+        );
+
+      if (pendingRaw) {
+        try {
+          const pending = JSON.parse(
+            pendingRaw,
+          ) as {
+            mint?: string;
+            signatures?: string[];
+            createdAt?: string;
+            creator?: string;
+          };
+
+          const signature =
+            pending.signatures?.[0];
+
+          if (
+            pending.mint &&
+            signature &&
+            pending.creator ===
+              publicKey.toBase58()
+          ) {
+            candidate = {
+              mint: pending.mint,
+              signature,
+              createdAt:
+                pending.createdAt,
+            };
+          }
+        } catch {
+          // Fall through to server-side recent-launch discovery.
+        }
+      }
+
+      if (!candidate) {
+        const recoveryResponse =
+          await fetch(
+            `/api/creator/launches/recover-latest?creator=${encodeURIComponent(
+              publicKey.toBase58(),
+            )}`,
+            {
+              cache: "no-store",
+            },
+          );
+
+        const recoveryPayload =
+          (await recoveryResponse.json().catch(() => null)) as
+            | {
+                candidate?: {
+                  mint: string;
+                  signature: string;
+                  createdAt?: string;
+                };
+                error?: string;
+              }
+            | null;
+
+        if (
+          !recoveryResponse.ok ||
+          !recoveryPayload?.candidate
+        ) {
+          throw new Error(
+            recoveryPayload?.error ||
+              "Kodiak could not find a recent successful LaunchLab creation for this wallet.",
+          );
+        }
+
+        candidate =
+          recoveryPayload.candidate;
+      }
+
+      const createdAt =
+        candidate.createdAt ||
+        new Date().toISOString();
+
+      setRecoveryMessage(
+        "Successful on-chain launch found. Registering it in Kodiak...",
+      );
+
+      await registerVerifiedLaunch({
+        mint: candidate.mint,
+        launchSignature:
+          candidate.signature,
+        signatures: [
+          candidate.signature,
+        ],
+        createdAt,
+        name,
+        symbol,
+      });
+
+      setLaunchStatus({
+        kind: "success",
+        message:
+          "Recovered the successful on-chain launch and added it to the Creator Dashboard.",
+        mint: candidate.mint,
+        signatures: [
+          candidate.signature,
+        ],
+      });
+
+      setRecoveryMessage(
+        "Recovery complete. Do not launch the token again.",
+      );
+    } catch (recoveryError) {
+      setRecoveryMessage(
+        recoveryError instanceof Error
+          ? recoveryError.message
+          : "Unable to recover the recent launch.",
+      );
+    } finally {
+      setRecoveryWorking(false);
+    }
+  }
+
 
   const prepareLaunchTransaction = async () => {
     if (!publicKey || !signTransaction || !signAllTransactions) {
@@ -715,21 +993,62 @@ export default function LaunchPage() {
 
         uniqueSignatures.push(signature);
 
-        const confirmation =
-          await connection.confirmTransaction(
-            {
-              signature,
-              blockhash: latestBlockhash.blockhash,
-              lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-            },
-            "confirmed",
+        window.localStorage.setItem(
+          pendingLaunchStorageKey,
+          JSON.stringify({
+            network: KODIAK_NETWORK,
+            mint: mintKeypair.publicKey.toBase58(),
+            signatures: uniqueSignatures,
+            name: form.name,
+            symbol: form.symbol,
+            creator: publicKey.toBase58(),
+            createdAt: new Date().toISOString(),
+          }),
+        );
+
+        let submittedState:
+          | "confirmed"
+          | "failed"
+          | "unknown" = "unknown";
+
+        try {
+          const confirmation =
+            await connection.confirmTransaction(
+              {
+                signature,
+                blockhash:
+                  latestBlockhash.blockhash,
+                lastValidBlockHeight:
+                  latestBlockhash.lastValidBlockHeight,
+              },
+              "confirmed",
+            );
+
+          submittedState =
+            confirmation.value.err
+              ? "failed"
+              : "confirmed";
+        } catch (confirmationError) {
+          console.warn(
+            "Primary launch confirmation did not complete; checking the submitted signature directly:",
+            confirmationError,
           );
 
-        if (confirmation.value.err) {
+          submittedState =
+            await waitForSubmittedSignature(
+              signature,
+            );
+        }
+
+        if (submittedState === "failed") {
           throw new Error(
-            `Launch transaction ${index + 1} was submitted but failed on-chain: ${JSON.stringify(
-              confirmation.value.err,
-            )}`,
+            `Launch transaction ${index + 1} was submitted but Solana reports that it failed on-chain.`,
+          );
+        }
+
+        if (submittedState === "unknown") {
+          throw new Error(
+            `Launch transaction ${index + 1} was submitted as ${signature}, but Kodiak could not determine its final Solana status. Do not launch again. Use "Recover recent on-chain launch" after the transaction appears in your wallet.`,
           );
         }
       }
@@ -796,54 +1115,20 @@ export default function LaunchPage() {
 
       const createdAt = new Date().toISOString();
 
-      window.localStorage.setItem(
-        lastLaunchStorageKey,
-        JSON.stringify({
-          network: KODIAK_NETWORK,
-          mint,
-          signatures: uniqueSignatures,
-          name: form.name,
-          symbol: form.symbol,
-          creator: publicKey.toBase58(),
-          createdAt,
-        }),
-      );
-
       setLaunchStatus({
         kind: "working",
-        message: "Registering the verified launch in the Creator Dashboard...",
+        message:
+          "Registering the verified launch in the Creator Dashboard...",
       });
 
-      const registrationResponse = await fetch(
-        "/api/creator/launches",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            mint,
-            creator: publicKey.toBase58(),
-            name: form.name,
-            symbol: form.symbol,
-            signature: launchSignature,
-            createdAt,
-          }),
-        },
-      );
-
-      const registrationPayload =
-        (await registrationResponse.json()) as {
-          launch?: { mint: string };
-          error?: string;
-        };
-
-      if (!registrationResponse.ok || !registrationPayload.launch) {
-        throw new Error(
-          registrationPayload.error ||
-            "The token launched, but Creator Dashboard registration failed.",
-        );
-      }
+      await registerVerifiedLaunch({
+        mint,
+        launchSignature,
+        signatures: uniqueSignatures,
+        createdAt,
+        name: form.name,
+        symbol: form.symbol,
+      });
 
       setLaunchStatus({
         kind: "success",
@@ -1407,6 +1692,32 @@ export default function LaunchPage() {
                           <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-black/40 p-3 text-[11px] leading-5 text-zinc-300">
                             {launchStatus.logs.join("\n")}
                           </pre>
+                        )}
+
+                      {connected &&
+                        launchStatus.kind !== "working" && (
+                          <div className="mt-4 rounded-xl border border-amber-300/15 bg-amber-300/[0.04] p-3">
+                            <p className="text-xs font-bold text-zinc-300">
+                              Already succeeded on-chain but missing from Kodiak?
+                            </p>
+                            <button
+                              type="button"
+                              disabled={recoveryWorking}
+                              onClick={() => {
+                                void recoverLatestOnChainLaunch();
+                              }}
+                              className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 px-4 py-2 text-xs font-black text-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {recoveryWorking
+                                ? "Checking Solana..."
+                                : "Recover recent on-chain launch"}
+                            </button>
+                            {recoveryMessage && (
+                              <p className="mt-2 break-words text-xs leading-5 text-zinc-400">
+                                {recoveryMessage}
+                              </p>
+                            )}
+                          </div>
                         )}
 
                       {launchStatus.kind === "success" && (

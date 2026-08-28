@@ -146,9 +146,9 @@ function readU64LE(data: Buffer, offset: number): bigint {
 }
 
 function formatRawAmount(raw: bigint, decimals: number): string {
-  const negative = raw < 0n;
+  const negative = raw < BigInt(0);
   const value = negative ? -raw : raw;
-  const scale = 10n ** BigInt(decimals);
+  const scale = BigInt(10) ** BigInt(decimals);
   const whole = value / scale;
   const fraction = (value % scale)
     .toString()

@@ -604,23 +604,24 @@ export default function LaunchPage() {
         logs: diagnosticLogs,
       });
 
-      setLaunchStatus({
-        kind: "working",
-        message:
-          "Kodiak simulation PASSED. Rebuilding the launch with fresh Solana blockhashes before wallet approval...",
-      });
-
-      const freshBuild =
-        await buildLaunch();
-
-      if (
-        freshBuild.transactions.length !==
-        transactionCount
-      ) {
-        throw new Error(
-          `Raydium rebuilt the launch with ${freshBuild.transactions.length} transactions after Kodiak simulated ${transactionCount}. No wallet request was opened; please try again.`,
-        );
-      }
+      /*
+       * IMPORTANT: do not ask Raydium to build the launch a second time here.
+       *
+       * The transaction that just passed Kodiak's simulation is already the
+       * transaction we want Phantom to review. Re-running createLaunchpad()
+       * after simulation causes Raydium's SDK to perform additional Solana RPC
+       * account reads. On public/devnet RPC those nonessential reads can be
+       * rate-limited (HTTP 429), which previously turned a PASSED simulation
+       * into a blocked launch before Phantom ever opened.
+       *
+       * simulateTransaction(..., replaceRecentBlockhash: true) does not mutate
+       * the original VersionedTransaction. At wallet handoff below Kodiak
+       * already replaces recentBlockhash with a brand-new blockhash, clears
+       * signatures, lets Phantom sign first, then adds the mint signature.
+       * Therefore the simulated build can safely be reused without another
+       * Raydium SDK/RPC build round-trip.
+       */
+      const freshBuild = simulationBuild;
 
       setLaunchStatus({
         kind: "idle",

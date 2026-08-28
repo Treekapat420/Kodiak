@@ -16,6 +16,7 @@ import {
 import {
   KODIAK_LAUNCHPAD_PROGRAM_ID,
 } from "@/lib/raydium/devnet";
+import { getRedis } from "@/lib/server/redis";
 import {
   KODIAK_IS_DEVNET,
   KODIAK_IS_MAINNET,

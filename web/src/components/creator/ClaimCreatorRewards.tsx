@@ -791,38 +791,48 @@ export function ClaimCreatorRewards() {
       throw new Error("Connect the creator wallet first.");
     }
 
-    const accountInfo = await connection.getAccountInfo(
-      new PublicKey(base.poolId),
-      "confirmed",
-    );
+    const poolKey = new PublicKey(base.poolId);
+    let accountInfo: Awaited<ReturnType<typeof connection.getAccountInfo>> = null;
+    let lastError: unknown = null;
+
+    // Devnet RPC can transiently return 429. A refresh gets a few short,
+    // bounded retries instead of immediately destroying a verified pool.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        accountInfo = await connection.getAccountInfo(poolKey, "confirmed");
+        if (accountInfo) break;
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("429") && !message.toLowerCase().includes("rate limit")) {
+          throw error;
+        }
+        if (attempt < 2) {
+          await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+        }
+      }
+    }
 
     if (!accountInfo) {
+      if (lastError) throw lastError;
       throw new Error(`CPMM pool ${base.poolId} was not found on ${NETWORK_LABEL}.`);
     }
 
     if (accountInfo.data.length < 413) {
-      return { ...base };
+      throw new Error(`CPMM pool ${base.poolId} returned an unexpected PoolState size.`);
     }
 
+    // Raydium CPMM PoolState is zero-copy with an 8-byte Anchor discriminator.
+    // Decode the fields Kodiak needs directly from the already-fetched account
+    // so a simple fee refresh does not make a second SDK/RPC request.
     const data = new Uint8Array(accountInfo.data);
     const poolCreator = new PublicKey(data.slice(40, 72));
+    const mintA = new PublicKey(data.slice(168, 200)).toBase58();
+    const mintB = new PublicKey(data.slice(200, 232)).toBase58();
+    const decimalsA = data[331];
+    const decimalsB = data[332];
     const creatorFee0 = readU64LE(data, 397);
     const creatorFee1 = readU64LE(data, 405);
-
-    const raydium = await loadKodiakRaydium({
-      connection,
-      owner: publicKey,
-      signTransaction: raydiumSignTransaction,
-      signAllTransactions: raydiumSignAllTransactions,
-    });
-
-    const rpcPool = await raydium.cpmm.getPoolInfoFromRpc(base.poolId);
-    assertCorrectCpmmPoolProgram(rpcPool.poolInfo.programId);
-
-    const mintA = rpcPool.poolInfo.mintA.address;
-    const mintB = rpcPool.poolInfo.mintB.address;
-    const decimalsA = rpcPool.poolInfo.mintA.decimals;
-    const decimalsB = rpcPool.poolInfo.mintB.decimals;
 
     return {
       ...base,
@@ -833,8 +843,8 @@ export function ClaimCreatorRewards() {
       feeBRaw: creatorFee1.toString(),
       mintA,
       mintB,
-      symbolA: friendlyMintSymbol(mintA, rpcPool.poolInfo.mintA.symbol),
-      symbolB: friendlyMintSymbol(mintB, rpcPool.poolInfo.mintB.symbol),
+      symbolA: friendlyMintSymbol(mintA, mintA === base.mint ? base.symbol : undefined),
+      symbolB: friendlyMintSymbol(mintB, mintB === base.mint ? base.symbol : undefined),
     };
   }
 
@@ -884,6 +894,12 @@ export function ClaimCreatorRewards() {
         } catch (error) {
           console.warn(`Kodiak CPMM pool ${pool.poolId} could not be read:`, error);
         }
+      }
+
+      if (serverPools.length > 0 && hydrated.length === 0) {
+        throw new Error(
+          "Kodiak found the persisted CPMM pool, but Solana RPC could not read its PoolState. The last verified fee state has been preserved.",
+        );
       }
 
       setKnownCpmmPools(hydrated);

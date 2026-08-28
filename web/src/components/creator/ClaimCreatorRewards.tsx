@@ -183,6 +183,25 @@ function friendlyMintSymbol(address: string, fallback?: string): string {
   return fallback || `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+async function fetchJsonWithTimeout(
+  input: string,
+  timeoutMs: number,
+): Promise<{ response: Response; payload: unknown }> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(input, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const payload = await response.json();
+    return { response, payload };
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 
 const NETWORK_LABEL = kodiakNetworkLabel();
 

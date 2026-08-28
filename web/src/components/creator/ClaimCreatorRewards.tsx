@@ -142,6 +142,13 @@ type KnownCpmmPool = {
   symbolB?: string;
 };
 
+type CpmmDiscoveryDiagnostic = {
+  mint?: string;
+  symbol?: string;
+  step: string;
+  detail: string;
+};
+
 function readU64LE(data: Buffer, offset: number): bigint {
   return data.readBigUInt64LE(offset);
 }
@@ -522,6 +529,11 @@ export function ClaimCreatorRewards() {
     useState(false);
 
   const [
+    cpmmDiscoveryDiagnostics,
+    setCpmmDiscoveryDiagnostics,
+  ] = useState<CpmmDiscoveryDiagnostic[]>([]);
+
+  const [
     status,
     setStatus,
   ] = useState<Status>({
@@ -742,27 +754,51 @@ export function ClaimCreatorRewards() {
   async function discoverKnownCpmmPools() {
     if (!publicKey) {
       setKnownCpmmPools([]);
+      setCpmmDiscoveryDiagnostics([]);
       return [];
     }
 
+    const diagnostics: CpmmDiscoveryDiagnostic[] = [];
+    const addDiagnostic = (
+      step: string,
+      detail: string,
+      launch?: KodiakLaunchRecord,
+    ) => {
+      diagnostics.push({
+        mint: launch?.mint,
+        symbol: launch?.symbol,
+        step,
+        detail,
+      });
+    };
+
     try {
       setKnownCpmmPoolsLoading(true);
+      setCpmmDiscoveryDiagnostics([]);
 
-      const launchesResponse =
-        await fetch(
-          `/api/creator/dashboard?wallet=${encodeURIComponent(
-            publicKey.toBase58(),
-          )}`,
-          {
-            cache: "no-store",
-          },
-        );
+      const wallet = publicKey.toBase58();
+      addDiagnostic(
+        "Connected wallet",
+        wallet,
+      );
+
+      const launchesResponse = await fetch(
+        `/api/creator/dashboard?wallet=${encodeURIComponent(wallet)}`,
+        { cache: "no-store" },
+      );
 
       const launchesPayload =
         (await launchesResponse.json()) as {
           launches?: KodiakLaunchRecord[];
+          network?: string;
+          wallet?: string;
           error?: string;
         };
+
+      addDiagnostic(
+        "Dashboard response",
+        `HTTP ${launchesResponse.status}; network=${launchesPayload.network || "unknown"}; wallet=${launchesPayload.wallet || "unknown"}`,
+      );
 
       if (!launchesResponse.ok) {
         throw new Error(
@@ -771,131 +807,213 @@ export function ClaimCreatorRewards() {
         );
       }
 
-      const launches =
-        Array.isArray(
-          launchesPayload.launches,
-        )
-          ? launchesPayload.launches
-          : [];
+      const launches = Array.isArray(launchesPayload.launches)
+        ? launchesPayload.launches
+        : [];
 
-      const results =
-        await Promise.all(
-          launches.map(
-            async (
-              launch,
-            ): Promise<KnownCpmmPool | null> => {
-              try {
-                const response =
-                  await fetch(
-                    `/api/token/${encodeURIComponent(
-                      launch.mint,
-                    )}/graduation`,
-                    {
-                      cache: "no-store",
-                    },
-                  );
+      addDiagnostic(
+        "Dashboard launches",
+        `${launches.length} launch record(s) returned${
+          launches.length > 0
+            ? `: ${launches
+                .map((launch) => `${launch.symbol} (${launch.mint})`)
+                .join(", ")}`
+            : ""
+        }`,
+      );
 
-                const payload =
-                  (await response.json()) as
-                    KodiakGraduationResponse;
+      const results = await Promise.all(
+        launches.map(
+          async (launch): Promise<KnownCpmmPool | null> => {
+            try {
+              addDiagnostic(
+                "Checking launch",
+                `${launch.name} $${launch.symbol}`,
+                launch,
+              );
 
-                if (
-                  !response.ok ||
-                  !payload.trading
-                    ?.graduated ||
-                  !payload.trading
-                    ?.cpmmReady ||
-                  !payload.cpmmPoolId
-                ) {
-                  return null;
-                }
+              const response = await fetch(
+                `/api/token/${encodeURIComponent(launch.mint)}/graduation`,
+                { cache: "no-store" },
+              );
 
-                const poolId = payload.cpmmPoolId;
-                const accountInfo =
-                  await connection.getAccountInfo(
-                    new PublicKey(poolId),
-                    "confirmed",
-                  );
+              const payload =
+                (await response.json()) as KodiakGraduationResponse;
 
-                if (!accountInfo || accountInfo.data.length < 413) {
-                  return {
-                    mint: launch.mint,
-                    name: launch.name,
-                    symbol: launch.symbol,
-                    poolId,
-                  };
-                }
+              addDiagnostic(
+                "Graduation response",
+                `HTTP ${response.status}; state=${payload.state || "unknown"}; graduated=${String(payload.trading?.graduated)}; cpmmReady=${String(payload.trading?.cpmmReady)}; cpmmPoolId=${payload.cpmmPoolId || "none"}${payload.error ? `; error=${payload.error}` : ""}`,
+                launch,
+              );
 
-                // Raydium CPMM PoolState is #[repr(C, packed)]. The current
-                // on-chain layout places pool_creator at byte 40 and the two
-                // creator-fee u64 counters at bytes 397 and 405.
-                const data = Buffer.from(accountInfo.data);
-                const poolCreator = new PublicKey(
-                  data.subarray(40, 72),
+              if (!response.ok) {
+                addDiagnostic(
+                  "Rejected",
+                  `Graduation endpoint returned HTTP ${response.status}.`,
+                  launch,
                 );
-                const creatorFee0 = readU64LE(data, 397);
-                const creatorFee1 = readU64LE(data, 405);
+                return null;
+              }
 
-                const raydium = await loadKodiakRaydium({
-                  connection,
-                  owner: publicKey,
-                  signTransaction: raydiumSignTransaction,
-                  signAllTransactions: raydiumSignAllTransactions,
-                });
-                const rpcPool =
-                  await raydium.cpmm.getPoolInfoFromRpc(poolId);
-                assertCorrectCpmmPoolProgram(rpcPool.poolInfo.programId);
+              if (!payload.trading?.graduated) {
+                addDiagnostic(
+                  "Rejected",
+                  "Graduation endpoint does not mark this token as graduated.",
+                  launch,
+                );
+                return null;
+              }
 
-                const mintA = rpcPool.poolInfo.mintA.address;
-                const mintB = rpcPool.poolInfo.mintB.address;
-                const decimalsA = rpcPool.poolInfo.mintA.decimals;
-                const decimalsB = rpcPool.poolInfo.mintB.decimals;
+              if (!payload.trading?.cpmmReady) {
+                addDiagnostic(
+                  "Rejected",
+                  "Graduation endpoint does not mark the CPMM pool as ready.",
+                  launch,
+                );
+                return null;
+              }
 
+              if (!payload.cpmmPoolId) {
+                addDiagnostic(
+                  "Rejected",
+                  "Graduation endpoint returned no CPMM pool ID.",
+                  launch,
+                );
+                return null;
+              }
+
+              const poolId = payload.cpmmPoolId;
+              addDiagnostic(
+                "CPMM pool found",
+                poolId,
+                launch,
+              );
+
+              const accountInfo = await connection.getAccountInfo(
+                new PublicKey(poolId),
+                "confirmed",
+              );
+
+              if (!accountInfo) {
+                addDiagnostic(
+                  "RPC pool account",
+                  "Pool account was not returned by the connected Solana RPC. Keeping the pool for claim fallback.",
+                  launch,
+                );
                 return {
                   mint: launch.mint,
                   name: launch.name,
                   symbol: launch.symbol,
                   poolId,
-                  creatorMatches: poolCreator.equals(publicKey),
-                  feeA: formatRawAmount(creatorFee0, decimalsA),
-                  feeB: formatRawAmount(creatorFee1, decimalsB),
-                  feeARaw: creatorFee0.toString(),
-                  feeBRaw: creatorFee1.toString(),
-                  mintA,
-                  mintB,
-                  symbolA: friendlyMintSymbol(
-                    mintA,
-                    rpcPool.poolInfo.mintA.symbol,
-                  ),
-                  symbolB: friendlyMintSymbol(
-                    mintB,
-                    rpcPool.poolInfo.mintB.symbol,
-                  ),
                 };
-              } catch {
-                return null;
               }
-            },
-          ),
-        );
 
-      const pools =
-        results.filter(
-          (
-            item,
-          ): item is KnownCpmmPool =>
-            Boolean(item),
-        );
+              addDiagnostic(
+                "RPC pool account",
+                `Loaded ${accountInfo.data.length} bytes; owner=${accountInfo.owner.toBase58()}`,
+                launch,
+              );
 
-      setKnownCpmmPools(
-        pools,
+              if (accountInfo.data.length < 413) {
+                addDiagnostic(
+                  "PoolState decode",
+                  `Pool account is ${accountInfo.data.length} bytes, shorter than the 413-byte creator-fee layout expected by this diagnostic build. Keeping the pool without decoded fee counters.`,
+                  launch,
+                );
+                return {
+                  mint: launch.mint,
+                  name: launch.name,
+                  symbol: launch.symbol,
+                  poolId,
+                };
+              }
+
+              const data = Buffer.from(accountInfo.data);
+              const poolCreator = new PublicKey(data.subarray(40, 72));
+              const creatorFee0 = readU64LE(data, 397);
+              const creatorFee1 = readU64LE(data, 405);
+
+              addDiagnostic(
+                "PoolState decode",
+                `creator=${poolCreator.toBase58()}; raw creator fees=${creatorFee0.toString()} / ${creatorFee1.toString()}`,
+                launch,
+              );
+
+              const raydium = await loadKodiakRaydium({
+                connection,
+                owner: publicKey,
+                signTransaction: raydiumSignTransaction,
+                signAllTransactions: raydiumSignAllTransactions,
+              });
+              const rpcPool = await raydium.cpmm.getPoolInfoFromRpc(poolId);
+              assertCorrectCpmmPoolProgram(rpcPool.poolInfo.programId);
+
+              const mintA = rpcPool.poolInfo.mintA.address;
+              const mintB = rpcPool.poolInfo.mintB.address;
+              const decimalsA = rpcPool.poolInfo.mintA.decimals;
+              const decimalsB = rpcPool.poolInfo.mintB.decimals;
+
+              addDiagnostic(
+                "Raydium RPC decode",
+                `mintA=${mintA} (${decimalsA}); mintB=${mintB} (${decimalsB}); program=${rpcPool.poolInfo.programId}`,
+                launch,
+              );
+
+              return {
+                mint: launch.mint,
+                name: launch.name,
+                symbol: launch.symbol,
+                poolId,
+                creatorMatches: poolCreator.equals(publicKey),
+                feeA: formatRawAmount(creatorFee0, decimalsA),
+                feeB: formatRawAmount(creatorFee1, decimalsB),
+                feeARaw: creatorFee0.toString(),
+                feeBRaw: creatorFee1.toString(),
+                mintA,
+                mintB,
+                symbolA: friendlyMintSymbol(
+                  mintA,
+                  rpcPool.poolInfo.mintA.symbol,
+                ),
+                symbolB: friendlyMintSymbol(
+                  mintB,
+                  rpcPool.poolInfo.mintB.symbol,
+                ),
+              };
+            } catch (error) {
+              addDiagnostic(
+                "Discovery exception",
+                error instanceof Error ? error.message : String(error),
+                launch,
+              );
+              return null;
+            }
+          },
+        ),
       );
 
+      const pools = results.filter(
+        (item): item is KnownCpmmPool => Boolean(item),
+      );
+
+      addDiagnostic(
+        "Discovery result",
+        `${pools.length} graduated CPMM pool(s) accepted.`,
+      );
+
+      setKnownCpmmPools(pools);
+      setCpmmDiscoveryDiagnostics([...diagnostics]);
       return pools;
-    } finally {
-      setKnownCpmmPoolsLoading(
-        false,
+    } catch (error) {
+      addDiagnostic(
+        "Discovery failed",
+        error instanceof Error ? error.message : String(error),
       );
+      setKnownCpmmPools([]);
+      setCpmmDiscoveryDiagnostics([...diagnostics]);
+      return [];
+    } finally {
+      setKnownCpmmPoolsLoading(false);
     }
   }
 
@@ -2092,6 +2210,29 @@ export function ClaimCreatorRewards() {
             No graduated Kodiak CPMM pools were found for this connected creator wallet.
           </p>
         )}
+
+        {connected && cpmmDiscoveryDiagnostics.length > 0 ? (
+          <div className="mt-4 rounded-xl border border-sky-300/20 bg-sky-300/[0.04] p-3">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-sky-200">
+              CPMM Discovery Diagnostics
+            </p>
+            <div className="mt-2 grid gap-2">
+              {cpmmDiscoveryDiagnostics.map((item, index) => (
+                <div
+                  key={`${item.mint || "global"}-${item.step}-${index}`}
+                  className="rounded-lg border border-white/5 bg-black/20 p-2"
+                >
+                  <p className="text-xs font-black text-white">
+                    {item.symbol ? `$${item.symbol} - ` : ""}{item.step}
+                  </p>
+                  <p className="mt-1 break-all text-[11px] leading-5 text-zinc-400">
+                    {item.detail}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div

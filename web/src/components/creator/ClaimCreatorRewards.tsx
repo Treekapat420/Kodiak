@@ -130,7 +130,37 @@ type KnownCpmmPool = {
   name: string;
   symbol: string;
   poolId: string;
+  creatorMatches?: boolean;
+  feeA?: string;
+  feeB?: string;
+  feeARaw?: string;
+  feeBRaw?: string;
+  mintA?: string;
+  mintB?: string;
+  symbolA?: string;
+  symbolB?: string;
 };
+
+function readU64LE(data: Buffer, offset: number): bigint {
+  return data.readBigUInt64LE(offset);
+}
+
+function formatRawAmount(raw: bigint, decimals: number): string {
+  const negative = raw < 0n;
+  const value = negative ? -raw : raw;
+  const scale = 10n ** BigInt(decimals);
+  const whole = value / scale;
+  const fraction = (value % scale)
+    .toString()
+    .padStart(decimals, "0")
+    .replace(/0+$/, "");
+  return `${negative ? "-" : ""}${whole.toString()}${fraction ? `.${fraction}` : ""}`;
+}
+
+function friendlyMintSymbol(address: string, fallback?: string): string {
+  if (address === NATIVE_MINT.toBase58()) return "SOL";
+  return fallback || `${address.slice(0, 4)}...${address.slice(-4)}`;
+}
 
 const NETWORK_LABEL = kodiakNetworkLabel();
 
@@ -732,15 +762,67 @@ export function ClaimCreatorRewards() {
                   return null;
                 }
 
+                const poolId = payload.cpmmPoolId;
+                const accountInfo =
+                  await connection.getAccountInfo(
+                    new PublicKey(poolId),
+                    "confirmed",
+                  );
+
+                if (!accountInfo || accountInfo.data.length < 413) {
+                  return {
+                    mint: launch.mint,
+                    name: launch.name,
+                    symbol: launch.symbol,
+                    poolId,
+                  };
+                }
+
+                // Raydium CPMM PoolState is #[repr(C, packed)]. The current
+                // on-chain layout places pool_creator at byte 40 and the two
+                // creator-fee u64 counters at bytes 397 and 405.
+                const data = Buffer.from(accountInfo.data);
+                const poolCreator = new PublicKey(
+                  data.subarray(40, 72),
+                );
+                const creatorFee0 = readU64LE(data, 397);
+                const creatorFee1 = readU64LE(data, 405);
+
+                const raydium = await loadKodiakRaydium({
+                  connection,
+                  owner: publicKey,
+                  signTransaction,
+                  signAllTransactions,
+                });
+                const rpcPool =
+                  await raydium.cpmm.getPoolInfoFromRpc(poolId);
+                assertCorrectCpmmPoolProgram(rpcPool.poolInfo.programId);
+
+                const mintA = rpcPool.poolInfo.mintA.address;
+                const mintB = rpcPool.poolInfo.mintB.address;
+                const decimalsA = rpcPool.poolInfo.mintA.decimals;
+                const decimalsB = rpcPool.poolInfo.mintB.decimals;
+
                 return {
-                  mint:
-                    launch.mint,
-                  name:
-                    launch.name,
-                  symbol:
-                    launch.symbol,
-                  poolId:
-                    payload.cpmmPoolId,
+                  mint: launch.mint,
+                  name: launch.name,
+                  symbol: launch.symbol,
+                  poolId,
+                  creatorMatches: poolCreator.equals(publicKey),
+                  feeA: formatRawAmount(creatorFee0, decimalsA),
+                  feeB: formatRawAmount(creatorFee1, decimalsB),
+                  feeARaw: creatorFee0.toString(),
+                  feeBRaw: creatorFee1.toString(),
+                  mintA,
+                  mintB,
+                  symbolA: friendlyMintSymbol(
+                    mintA,
+                    rpcPool.poolInfo.mintA.symbol,
+                  ),
+                  symbolB: friendlyMintSymbol(
+                    mintB,
+                    rpcPool.poolInfo.mintB.symbol,
+                  ),
                 };
               } catch {
                 return null;
@@ -1147,13 +1229,21 @@ export function ClaimCreatorRewards() {
 
       await discoverCpmmCreatorFees();
     } catch (error) {
-      setStatus({
-        kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "The direct CPMM creator-fee claim failed.",
-      });
+      const message =
+        error instanceof Error
+          ? error.message
+          : "The direct CPMM creator-fee claim failed.";
+
+      if (message.includes('"Custom":6014') || message.includes("Custom: 6014")) {
+        setStatus({
+          kind: "idle",
+          message:
+            "Raydium reports that this CPMM pool currently has zero creator fees available to collect.",
+        });
+        await discoverCpmmCreatorFees();
+      } else {
+        setStatus({ kind: "error", message });
+      }
     } finally {
       setClaimingCpmmPool(
         null,
@@ -1237,24 +1327,45 @@ export function ClaimCreatorRewards() {
         },
       );
 
-    const confirmation =
-      await connection.confirmTransaction(
-        {
-          signature,
-          blockhash:
-            latestBlockhash.blockhash,
-          lastValidBlockHeight:
-            latestBlockhash.lastValidBlockHeight,
-        },
-        "confirmed",
-      );
+    try {
+      const confirmation =
+        await connection.confirmTransaction(
+          {
+            signature,
+            blockhash: latestBlockhash.blockhash,
+            lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+          },
+          "confirmed",
+        );
 
-    if (confirmation.value.err) {
-      throw new Error(
-        `The ${NETWORK_LABEL} claim was submitted but failed on-chain: ${JSON.stringify(
-          confirmation.value.err,
-        )}`,
-      );
+      if (confirmation.value.err) {
+        throw new Error(
+          `The ${NETWORK_LABEL} claim was submitted but failed on-chain: ${JSON.stringify(
+            confirmation.value.err,
+          )}`,
+        );
+      }
+    } catch (error) {
+      // Mobile wallets/RPCs can time out after sendRawTransaction even when
+      // Solana accepted the transaction. Check the signature directly before
+      // reporting a failure to the creator.
+      const statusResult =
+        await connection.getSignatureStatuses([signature], {
+          searchTransactionHistory: true,
+        });
+      const landed = statusResult.value[0];
+
+      if (landed?.err) {
+        throw new Error(
+          `The ${NETWORK_LABEL} claim was submitted but failed on-chain: ${JSON.stringify(landed.err)}`,
+        );
+      }
+
+      if (!landed) {
+        throw new Error(
+          `The claim was submitted as ${signature}, but ${NETWORK_LABEL} RPC timed out before Kodiak could verify it. Do not submit another claim until the on-chain fee balance refreshes.`,
+        );
+      }
     }
 
     return signature;
@@ -1870,14 +1981,35 @@ export function ClaimCreatorRewards() {
                       }
                     </p>
 
-                    <p className="mt-3 text-xs leading-5 text-zinc-500">
-                      Fee amount unavailable while Raydium&apos;s index is unavailable. Kodiak will not send anything unless the direct Raydium claim transaction passes simulation first.
-                    </p>
+                    {pool.feeARaw !== undefined && pool.feeBRaw !== undefined ? (
+                      <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3">
+                        <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">
+                          On-chain creator fees
+                        </p>
+                        <p className="mt-2 text-sm font-bold text-white">
+                          {pool.feeA} {pool.symbolA} + {pool.feeB} {pool.symbolB}
+                        </p>
+                        <p className="mt-1 text-xs text-zinc-500">
+                          Read directly from Raydium&apos;s CPMM PoolState on Solana RPC.
+                        </p>
+                        {pool.creatorMatches === false ? (
+                          <p className="mt-2 text-xs font-bold text-rose-300">
+                            Connected wallet does not match this CPMM pool&apos;s on-chain creator. Claim disabled.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-xs leading-5 text-zinc-500">
+                        Kodiak could not decode the on-chain fee counters for this pool.
+                      </p>
+                    )}
 
                     <button
                       type="button"
                       disabled={
-                        busy
+                        busy ||
+                        pool.creatorMatches === false ||
+                        (pool.feeARaw === "0" && pool.feeBRaw === "0")
                       }
                       onClick={() =>
                         void claimKnownCpmmPool(
@@ -1886,10 +2018,11 @@ export function ClaimCreatorRewards() {
                       }
                       className="mt-4 rounded-xl bg-amber-300 px-4 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      {claimingCpmmPool ===
-                      pool.poolId
+                      {claimingCpmmPool === pool.poolId
                         ? "Checking claim..."
-                        : "Check & Claim CPMM Fees"}
+                        : pool.feeARaw === "0" && pool.feeBRaw === "0"
+                          ? "No CPMM Fees Available"
+                          : "Claim CPMM Fees"}
                     </button>
                   </div>
                 ),

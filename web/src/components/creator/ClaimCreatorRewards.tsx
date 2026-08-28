@@ -766,7 +766,7 @@ export function ClaimCreatorRewards() {
   }
 
   async function hydrateKnownCpmmPool(
-    base: CachedCpmmPool,
+    base: Pick<KnownCpmmPool, "mint" | "name" | "symbol" | "poolId">,
   ): Promise<KnownCpmmPool> {
     if (!publicKey) {
       throw new Error("Connect the creator wallet first.");

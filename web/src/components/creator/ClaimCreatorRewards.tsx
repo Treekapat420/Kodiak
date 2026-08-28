@@ -13,6 +13,7 @@ import {
 } from "@solana/spl-token";
 import {
   PublicKey,
+  Transaction,
   VersionedTransaction,
 } from "@solana/web3.js";
 import {
@@ -408,6 +409,53 @@ export function ClaimCreatorRewards() {
     signAllTransactions,
   } = useWallet();
 
+  type WalletTransaction =
+    Transaction | VersionedTransaction;
+
+  const raydiumSignTransaction = async <
+    T extends WalletTransaction,
+  >(transaction: T): Promise<T> => {
+    if (!signTransaction) {
+      throw new Error(
+        `Connect a wallet on ${NETWORK_LABEL} first.`,
+      );
+    }
+
+    const signed = await signTransaction(
+      transaction,
+    );
+
+    if (!signed) {
+      throw new Error(
+        "Wallet did not return a signed transaction.",
+      );
+    }
+
+    return signed as T;
+  };
+
+  const raydiumSignAllTransactions = async <
+    T extends WalletTransaction,
+  >(transactions: T[]): Promise<T[]> => {
+    if (!signAllTransactions) {
+      throw new Error(
+        `Connect a wallet on ${NETWORK_LABEL} first.`,
+      );
+    }
+
+    const signed = await signAllTransactions(
+      transactions,
+    );
+
+    if (!signed) {
+      throw new Error(
+        "Wallet did not return signed transactions.",
+      );
+    }
+
+    return signed as T[];
+  };
+
   const [
     claimableSol,
     setClaimableSol,
@@ -622,8 +670,8 @@ export function ClaimCreatorRewards() {
           connection,
           owner:
             publicKey,
-          signTransaction,
-          signAllTransactions,
+          signTransaction: raydiumSignTransaction,
+          signAllTransactions: raydiumSignAllTransactions,
         });
 
       const api =
@@ -791,8 +839,8 @@ export function ClaimCreatorRewards() {
                 const raydium = await loadKodiakRaydium({
                   connection,
                   owner: publicKey,
-                  signTransaction,
-                  signAllTransactions,
+                  signTransaction: raydiumSignTransaction,
+                  signAllTransactions: raydiumSignAllTransactions,
                 });
                 const rpcPool =
                   await raydium.cpmm.getPoolInfoFromRpc(poolId);
@@ -964,8 +1012,8 @@ export function ClaimCreatorRewards() {
           connection,
           owner:
             publicKey,
-          signTransaction,
-          signAllTransactions,
+          signTransaction: raydiumSignTransaction,
+          signAllTransactions: raydiumSignAllTransactions,
         });
 
       let poolInfo: unknown =
@@ -1137,8 +1185,8 @@ export function ClaimCreatorRewards() {
           connection,
           owner:
             publicKey,
-          signTransaction,
-          signAllTransactions,
+          signTransaction: raydiumSignTransaction,
+          signAllTransactions: raydiumSignAllTransactions,
         });
 
       const rpcPool =
@@ -1407,8 +1455,8 @@ export function ClaimCreatorRewards() {
         await loadKodiakRaydium({
           connection,
           owner: publicKey,
-          signTransaction,
-          signAllTransactions,
+          signTransaction: raydiumSignTransaction,
+          signAllTransactions: raydiumSignAllTransactions,
         });
 
       const built =
@@ -1552,8 +1600,8 @@ export function ClaimCreatorRewards() {
           connection,
           owner:
             publicKey,
-          signTransaction,
-          signAllTransactions,
+          signTransaction: raydiumSignTransaction,
+          signAllTransactions: raydiumSignAllTransactions,
         });
 
       const poolId =

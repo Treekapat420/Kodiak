@@ -890,7 +890,9 @@ export function ClaimCreatorRewards() {
       return hydrated;
     } catch (error) {
       console.error("Unable to load Kodiak CPMM pools:", error);
-      setKnownCpmmPools([]);
+      // Preserve the last verified pool/fee state when Devnet RPC is temporarily
+      // rate-limited or unavailable. A failed refresh must never erase a good
+      // on-chain result that is already on screen.
       throw error;
     } finally {
       setKnownCpmmPoolsLoading(false);
@@ -929,12 +931,13 @@ export function ClaimCreatorRewards() {
       });
     } catch (error) {
       console.error("Unable to refresh CPMM creator fees:", error);
-      setCpmmCreatorFees([]);
+      // Do not destroy the last successful CPMM result on a transient RPC
+      // failure. The user can retry manually with Refresh CPMM Fees.
       setStatus({
         kind: "error",
         message: error instanceof Error
-          ? error.message
-          : "Unable to refresh CPMM creator fees.",
+          ? `${error.message} Showing the last verified CPMM fee state, if available.`
+          : "Unable to refresh CPMM creator fees. Showing the last verified CPMM fee state, if available.",
       });
     } finally {
       setCpmmCreatorFeesLoading(false);
@@ -1274,25 +1277,16 @@ export function ClaimCreatorRewards() {
 
 
   useEffect(() => {
-    const timer =
-      window.setTimeout(
-        () => {
-          void refreshClaimableBalance();
-          void discoverCpmmCreatorFees();
-        },
-        0,
-      );
+    // Only the LaunchLab creator-vault balance is safe to load automatically.
+    // CPMM discovery is intentionally manual: repeated wallet/connection
+    // identity changes in mobile browsers can retrigger effects and hammer the
+    // Devnet RPC, causing 429s that overwrite an already verified pool state.
+    const timer = window.setTimeout(() => {
+      void refreshClaimableBalance();
+    }, 0);
 
-    return () =>
-      window.clearTimeout(
-        timer,
-      );
-  }, [
-    publicKey,
-    connection,
-    signTransaction,
-    signAllTransactions,
-  ]);
+    return () => window.clearTimeout(timer);
+  }, [publicKey, connection]);
 
   async function sendWalletFirstTransaction(
     transaction: VersionedTransaction,

@@ -10,7 +10,12 @@ import {
   TxVersion,
 } from "@raydium-io/raydium-sdk-v2";
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
-import { NATIVE_MINT } from "@solana/spl-token";
+import {
+  NATIVE_MINT,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { KodiakWalletButton } from "@/components/wallet/KodiakWalletButton";
 import { classifyKodiakFailure } from "@/lib/transactionFailure";
@@ -315,39 +320,103 @@ export default function TradePage() {
       try {
         const mintA = new PublicKey(normalizedMint);
 
-        const [supply, accounts] = await Promise.all([
+        /*
+         * Read the mint account first so Kodiak knows which SPL token program
+         * actually owns this mint. A recovered LaunchLab token must not be
+         * assumed to use one token program or depend on a broad parsed-account
+         * owner scan.
+         */
+        const mintAccount = await connection.getAccountInfo(
+          mintA,
+          "confirmed",
+        );
+
+        if (!mintAccount) {
+          throw new Error("Token mint account was not found.");
+        }
+
+        const tokenProgramId = mintAccount.owner.equals(
+          TOKEN_2022_PROGRAM_ID,
+        )
+          ? TOKEN_2022_PROGRAM_ID
+          : mintAccount.owner.equals(TOKEN_PROGRAM_ID)
+            ? TOKEN_PROGRAM_ID
+            : null;
+
+        if (!tokenProgramId) {
+          throw new Error(
+            `Unsupported token program for mint ${mintA.toBase58()}: ${mintAccount.owner.toBase58()}`,
+          );
+        }
+
+        const ownerAta = getAssociatedTokenAddressSync(
+          mintA,
+          publicKey,
+          false,
+          tokenProgramId,
+        );
+
+        /*
+         * LaunchLab sends the creator's purchased tokens to the wallet's ATA.
+         * Query that exact account instead of getParsedTokenAccountsByOwner().
+         * This is cheaper on public Devnet RPC and avoids a failed owner scan
+         * being silently displayed as a real zero-token balance.
+         */
+        const [supplyResult, balanceResult] = await Promise.allSettled([
           connection.getTokenSupply(mintA, "confirmed"),
-          connection.getParsedTokenAccountsByOwner(
-            publicKey,
-            { mint: mintA },
-            "confirmed",
-          ),
+          connection.getTokenAccountBalance(ownerAta, "confirmed"),
         ]);
 
-        let total = 0;
+        if (cancelled) return;
 
-        for (const account of accounts.value) {
-          const data = account.account.data;
+        if (balanceResult.status === "fulfilled") {
+          const amount = balanceResult.value.value;
+          const ui =
+            typeof amount.uiAmount === "number"
+              ? amount.uiAmount
+              : Number(amount.uiAmountString ?? "0");
 
-          if ("parsed" in data) {
-            const amount = data.parsed?.info?.tokenAmount;
-
-            const ui =
-              typeof amount?.uiAmount === "number"
-                ? amount.uiAmount
-                : Number(amount?.uiAmountString ?? "0");
-
-            if (Number.isFinite(ui)) total += ui;
-          }
+          setTokenBalance(Number.isFinite(ui) ? ui : 0);
+          setTokenDecimals(amount.decimals);
+          return;
         }
 
-        if (!cancelled) {
-          setTokenDecimals(supply.value.decimals);
-          setTokenBalance(total);
-        }
-      } catch {
-        if (!cancelled) {
+        /*
+         * A missing ATA genuinely means this wallet has no balance. RPC
+         * failures, however, must not masquerade as a confirmed zero.
+         */
+        const ataAccount = await connection.getAccountInfo(
+          ownerAta,
+          "confirmed",
+        );
+
+        if (cancelled) return;
+
+        if (!ataAccount) {
           setTokenBalance(0);
+
+          if (supplyResult.status === "fulfilled") {
+            setTokenDecimals(supplyResult.value.value.decimals);
+          } else {
+            setTokenDecimals(null);
+          }
+
+          return;
+        }
+
+        throw balanceResult.reason;
+      } catch (error) {
+        console.warn(
+          "Kodiak could not load the connected wallet token balance:",
+          error,
+        );
+
+        if (!cancelled) {
+          /*
+           * null renders as Loading/Unavailable and, critically, does not tell
+           * the sell form that a failed RPC lookup means the user owns zero.
+           */
+          setTokenBalance(null);
           setTokenDecimals(null);
         }
       }

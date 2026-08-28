@@ -42,7 +42,7 @@ type ResolvedPool = {
   name: string;
   symbol: string;
   poolId: string;
-  cpConfigId: string;
+  cpConfigId?: string | null;
 };
 
 const DEVNET_PLATFORM_ID = "D33yYxh4JRtdeyLq7sFD8MzSjdtUa3uNFsSk39QHY8yT";
@@ -142,18 +142,26 @@ export async function GET(request: NextRequest) {
 
     // First return every server-persisted mapping. These require zero graduation RPC calls.
     const persisted: ResolvedPool[] = records
-      .filter((record) => record.cpmmPoolId && record.cpConfigId)
+      .filter((record) => Boolean(record.cpmmPoolId))
       .map((record) => ({
         mint: record.mint,
         name: record.name,
         symbol: record.symbol,
         poolId: record.cpmmPoolId as string,
-        cpConfigId: record.cpConfigId as string,
+        cpConfigId: record.cpConfigId ?? null,
       }));
 
-    const unresolved = records.filter((record) => !record.cpmmPoolId || !record.cpConfigId);
-    if (unresolved.length === 0) {
-      return NextResponse.json({ network: KODIAK_NETWORK, wallet, pools: persisted });
+    const unresolved = records.filter((record) => !record.cpmmPoolId);
+
+    // A persisted pool ID is authoritative for Creator Rewards. Do not touch
+    // LaunchLab PlatformConfig or historical launch accounts just because an
+    // older record is missing cpConfigId. Those RPC lookups are optional
+    // backfill work and must never make a known pool disappear.
+    if (persisted.length > 0 || unresolved.length === 0) {
+      return NextResponse.json(
+        { network: KODIAK_NETWORK, wallet, pools: persisted },
+        { headers: { "Cache-Control": "no-store, max-age=0" } },
+      );
     }
 
     const connection = new Connection(serverRpcUrl(), "confirmed");

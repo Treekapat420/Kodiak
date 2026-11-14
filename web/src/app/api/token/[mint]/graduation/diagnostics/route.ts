@@ -112,7 +112,7 @@ async function recentSignatures(address: PublicKey, limit = 12) {
         try {
           const tx = await connection.getTransaction(item.signature, {
             commitment: "confirmed",
-            maxSupportedTransactionVersion: 0,
+            maxSupportedTransactionVersion: 1,
           });
           logs = tx?.meta?.logMessages ?? null;
         } catch {

@@ -67,7 +67,7 @@ type Diagnostics = {
     cancelled: boolean;
     cpmmReady: boolean;
   };
-  migrationHealth: {
+  migrationHealth?: {
     phase: "bonding" | "ready_pending" | "graduated_waiting_cpmm" | "cpmm_live" | "cancelled" | "unknown";
     transitionPending: boolean;
     attentionRecommended: boolean;
@@ -215,6 +215,7 @@ export function GraduationDiagnostics() {
             <StateBadge label="CPMM ready" active={data.trading.cpmmReady} />
           </div>
 
+          {data.migrationHealth ? (
           <div className={`rounded-2xl border p-4 ${
             data.migrationHealth.attentionRecommended
               ? "border-rose-400/25 bg-rose-400/[0.05]"
@@ -265,6 +266,12 @@ export function GraduationDiagnostics() {
               </p>
             )}
           </div>
+
+          ) : (
+            <div className="rounded-2xl border border-amber-300/25 bg-amber-300/[0.04] p-4 text-sm text-amber-200">
+              Migration health details were not returned by the API. Other diagnostic checks remain available.
+            </div>
+          )}
 
           <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
             <div className="flex items-center justify-between gap-4">
